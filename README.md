@@ -4,13 +4,13 @@ A runnable, dependency-light reference implementation of a secure multi-agent so
 
 ## Workflow
 
-`REQUEST -> PLAN -> BUILD -> QA & SECURITY -> FINAL SYNTHESIS`
+`REQUEST -> PLAN -> BUILD -> QA & SECURITY -> REPAIR (bounded) -> FINAL SYNTHESIS`
 
 The runtime uses three narrowly scoped agents controlled by a central orchestrator:
 
 - **System Planner** — converts a goal into steps, acceptance criteria, and risks.
-- **Core Builder** — produces implementation artifacts within the approved plan.
-- **QA & Security Auditor** — independently validates the build and can block release.
+- **Core Builder** — produces artifacts and can execute controlled repository changes on an approved feature branch.
+- **QA & Security Auditor** — independently validates the build, can inspect the repository diff, and can block release.
 
 The architecture and security specification is stored in [`architecture-security-review.json`](./architecture-security-review.json).
 
@@ -24,51 +24,51 @@ npm test
 npm start -- "Build a secure cloud service"
 ```
 
-The CLI prints a single structured JSON object containing the workflow status, agent outputs, audit trail, and final synthesized result.
+The CLI prints a single structured JSON object containing workflow state, agent outputs, audit events, repair attempts, and the final synthesized result.
 
 ## Implemented controls
 
 - Explicit workflow state machine
 - Planner -> Builder -> QA orchestration
+- Bounded Builder -> QA repair loop
 - Runtime validation of every agent handoff
 - Fail-closed error handling
-- QA release gate that blocks completion
+- QA release gate that blocks unresolved high/critical findings
+- Vendor-neutral model provider adapters
+- Persistent workflow state with atomic writes
 - Role-scoped tool gateway with allowlists
+- Controlled repository branch, read, create, update, and compare operations
+- Forced repository/branch scoping for provider-generated Builder actions
+- No direct writes to `main` or `master` through repository handlers
+- Diff-aware QA for configured repository workflows
 - Basic secret redaction for logs/errors
 - Audit events for workflow transitions
-- Node test suite for success, block, failure, allowlist, and secret-redaction paths
 - GitHub Actions CI with syntax checks, tests, and dependency audit
 
-## Repository structure
+## Repository execution model
 
-```text
-src/
-  index.js          CLI entrypoint
-  orchestrator.js   workflow state machine and synthesis
-  agents.js         planner, builder, and QA agents
-  contracts.js      handoff/state validation
-  security.js       redaction and role-scoped tool gateway
-tests/
-  orchestrator.test.js
-.github/workflows/
-  ci.yml
-architecture-security-review.json
+Repository automation is opt-in. A configured target defines:
+
+```json
+{
+  "repository": "owner/repo",
+  "base": "main",
+  "branch": "feature/agent-build"
+}
 ```
+
+Provider-generated repository actions cannot override the configured repository or feature branch. The Builder may create the approved branch and create/update approved paths through `ToolGateway`. QA reads the base-to-head comparison through the same gateway. If no reviewable diff exists, the default QA gate blocks the workflow.
+
+A failed QA review is fed back to Builder as `previous_qa`. The orchestrator retries only up to `maxRepairAttempts` (default: 2), preventing unbounded autonomous loops.
 
 ## Security model
 
-The runtime follows least privilege and treats agent outputs as untrusted until validated. Agents do not receive direct privileged credentials by default. External actions should be exposed only through `ToolGateway`, with per-role allowlists and narrowly scoped handlers. Critical or high QA/security findings must block completion.
+The runtime follows least privilege and treats user, provider, retrieved, and agent-generated content as untrusted. Privileged actions are exposed only through narrowly scoped handlers and per-role tool allowlists. Repository paths reject traversal attempts, target repositories and branches are explicitly allowlisted, and high/critical QA findings prevent completion.
 
-This reference implementation does **not** yet connect to an LLM provider, production database, cloud deployment account, or secret manager. Those integrations should be added behind interfaces rather than embedded directly in agent code.
+Production credentials must be supplied externally. No provider or GitHub secret is embedded in the repository.
 
-## Production hardening still required
+## Current status
 
-Before exposing this as a production service, add authentication/authorization, persistent workflow state, immutable audit storage, real secret-manager integration, request/rate/budget limits, outbound-network controls, prompt-injection defenses for retrieved content, production observability, and environment-separated credentials.
+**v0.3.0: controlled repository execution + diff-aware QA + bounded repair loop.**
 
-## CI
-
-CI runs on pushes to `main` and `feature/**` and on pull requests into `main`. It performs syntax validation, the Node test suite, and a high-severity dependency audit.
-
-## Status
-
-**Runnable reference runtime implemented.** The next milestone is provider adapters and persistence, while preserving the existing contracts and security boundaries.
+Further production hardening should add authentication/authorization for a hosted API, immutable centralized audit storage, a real secret manager, request/rate/token budgets, outbound-network controls, richer prompt-injection defenses, sandboxed build execution, CI-status ingestion, and explicit human approval before deployment or merge actions.

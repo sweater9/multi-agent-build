@@ -41,17 +41,44 @@ export class PlannerAgent {
 }
 
 export class BuilderAgent {
-  constructor({ id = 'builder_02', toolGateway = null, provider = null } = {}) {
+  constructor({ id = 'builder_02', toolGateway = null, provider = null, repositoryTarget = null } = {}) {
     this.id = id;
     this.role = 'builder';
     this.toolGateway = toolGateway;
     this.provider = provider;
+    this.repositoryTarget = repositoryTarget;
   }
 
-  async run({ goal, plan }) {
+  async executeRepositoryActions(actions = []) {
+    if (!actions.length) return [];
+    if (!this.toolGateway || !this.repositoryTarget) {
+      throw new Error('Repository actions requested without a configured ToolGateway and repository target');
+    }
+
+    const results = [];
+    for (const action of actions) {
+      if (!action || !['repo.create_branch', 'repo.create_file', 'repo.update_file'].includes(action.tool)) {
+        throw new Error(`Unsupported builder repository action '${action?.tool}'`);
+      }
+      const input = { ...(action.input || {}), repository: this.repositoryTarget.repository };
+      if (action.tool === 'repo.create_branch') {
+        input.branch = this.repositoryTarget.branch;
+        input.base = this.repositoryTarget.base || 'main';
+      } else {
+        input.branch = this.repositoryTarget.branch;
+      }
+      results.push({ tool: action.tool, result: await this.toolGateway.invoke(this.role, action.tool, input) });
+    }
+    return results;
+  }
+
+  async run({ goal, plan, attempt = 0, previousQa = null }) {
     validatePlan(plan);
     const build = this.provider
-      ? await this.provider.generate({ agentRole: this.role, input: { goal, plan } })
+      ? await this.provider.generate({
+          agentRole: this.role,
+          input: { goal, plan, attempt, previous_qa: previousQa, repository_target: this.repositoryTarget }
+        })
       : {
           agent_id: this.id,
           agent_role: 'Core Builder',
@@ -68,29 +95,61 @@ export class BuilderAgent {
           }],
           notes: [`Build prepared for goal: ${goal}`, 'No external privileged tool action is performed by default.']
         };
-    return validateBuild({ ...build, agent_id: build.agent_id || this.id });
+
+    const validated = validateBuild({ ...build, agent_id: build.agent_id || this.id });
+    const actionResults = await this.executeRepositoryActions(validated.repository_actions || []);
+    if (actionResults.length) {
+      validated.artifacts.push({ type: 'repository_actions', name: `attempt-${attempt}`, content: actionResults });
+      validated.notes.push(`Executed ${actionResults.length} controlled repository action(s).`);
+    }
+    return validated;
   }
 }
 
 export class QaAgent {
-  constructor({ id = 'qa_03', provider = null } = {}) {
+  constructor({ id = 'qa_03', provider = null, toolGateway = null, repositoryTarget = null } = {}) {
     this.id = id;
     this.role = 'qa';
     this.provider = provider;
+    this.toolGateway = toolGateway;
+    this.repositoryTarget = repositoryTarget;
   }
 
-  async run({ goal, plan, build }) {
+  async getRepositoryDiff() {
+    if (!this.toolGateway || !this.repositoryTarget) return null;
+    return this.toolGateway.invoke(this.role, 'repo.compare', {
+      repository: this.repositoryTarget.repository,
+      base: this.repositoryTarget.base || 'main',
+      head: this.repositoryTarget.branch
+    });
+  }
+
+  async run({ goal, plan, build, attempt = 0, previousQa = null }) {
     validatePlan(plan);
     validateBuild(build);
+    const repositoryDiff = await this.getRepositoryDiff();
 
     if (this.provider) {
-      const qa = await this.provider.generate({ agentRole: this.role, input: { goal, plan, build } });
+      const qa = await this.provider.generate({
+        agentRole: this.role,
+        input: {
+          goal,
+          plan,
+          build,
+          attempt,
+          previous_qa: previousQa,
+          repository_diff: repositoryDiff
+        }
+      });
       return validateQa({ ...qa, agent_id: qa.agent_id || this.id });
     }
 
     const findings = [];
     if (build.artifacts.length === 0) {
       findings.push({ severity: 'high', code: 'NO_ARTIFACTS', message: 'Builder produced no artifacts.' });
+    }
+    if (this.repositoryTarget && (!repositoryDiff || !Array.isArray(repositoryDiff.files) || repositoryDiff.files.length === 0)) {
+      findings.push({ severity: 'high', code: 'NO_REPOSITORY_DIFF', message: 'Configured repository workflow produced no reviewable diff.' });
     }
     const approved = !hasBlockingFinding(findings);
     return validateQa({
@@ -99,9 +158,11 @@ export class QaAgent {
       status: approved ? 'success' : 'blocked',
       approved,
       findings,
+      repository_diff: repositoryDiff,
       checks: {
         plan_valid: true,
         build_valid: true,
+        repository_diff_reviewed: this.repositoryTarget ? Boolean(repositoryDiff) : null,
         blocking_findings_absent: approved,
         least_privilege_required: true,
         secret_redaction_required: true
