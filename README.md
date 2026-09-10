@@ -1,129 +1,74 @@
 # Multi-Agent Build
 
-A reference architecture for a production-oriented multi-agent software delivery workflow.
+A runnable, dependency-light reference implementation of a secure multi-agent software delivery workflow.
 
 ## Workflow
 
 `REQUEST -> PLAN -> BUILD -> QA & SECURITY -> FINAL SYNTHESIS`
 
-The system is designed around three narrowly scoped agents controlled by a central orchestrator:
+The runtime uses three narrowly scoped agents controlled by a central orchestrator:
 
-- **System Planner** — turns a user goal into an executable plan, dependencies, acceptance criteria, and risk boundaries.
-- **Core Builder** — implements only the approved plan and returns structured artifacts and findings.
-- **QA & Security Auditor** — independently validates correctness, security, and production readiness and can block release.
+- **System Planner** — converts a goal into steps, acceptance criteria, and risks.
+- **Core Builder** — produces implementation artifacts within the approved plan.
+- **QA & Security Auditor** — independently validates the build and can block release.
 
-The authoritative architecture and security specification is stored in [`architecture-security-review.json`](./architecture-security-review.json).
+The architecture and security specification is stored in [`architecture-security-review.json`](./architecture-security-review.json).
 
-## Core design principles
+## Run locally
 
-- Least-privilege tool access
-- Explicit agent responsibilities
-- Schema-validated handoffs
-- Auditable workflow state
-- Blocking QA and security gates
-- Secret isolation and redaction
-- Controlled retries, budgets, and timeouts
-- Human approval for high-impact production operations
+Requires Node.js 20 or newer.
 
-## Recommended architecture
-
-```text
-User / Client
-     |
-     v
-API / Request Intake
-     |
-     v
-Orchestrator + Workflow State Machine
-     |
-     +--> Planner Agent
-     |
-     +--> Builder Agent --> Tool Gateway --> GitHub / CI / Cloud / DB
-     |
-     +--> QA & Security Agent
-     |
-     v
-Final Synthesizer
-     |
-     v
-Approved Result + Artifacts + Findings
-
-Supporting services:
-- Workflow database
-- Artifact/object store
-- Secret manager
-- Audit log
-- Metrics / tracing / structured logs
+```bash
+npm install
+npm test
+npm start -- "Build a secure cloud service"
 ```
 
-## Workflow states
+The CLI prints a single structured JSON object containing the workflow status, agent outputs, audit trail, and final synthesized result.
 
-```text
-received
-  -> planning
-  -> building
-  -> qa_review
-  -> completed
+## Implemented controls
 
-Any stage may transition to:
-  -> blocked
-  -> failed
-```
+- Explicit workflow state machine
+- Planner -> Builder -> QA orchestration
+- Runtime validation of every agent handoff
+- Fail-closed error handling
+- QA release gate that blocks completion
+- Role-scoped tool gateway with allowlists
+- Basic secret redaction for logs/errors
+- Audit events for workflow transitions
+- Node test suite for success, block, failure, allowlist, and secret-redaction paths
+- GitHub Actions CI with syntax checks, tests, and dependency audit
 
-Only the orchestrator should be allowed to update the authoritative workflow state.
-
-## Production security baseline
-
-Before production use, implement and verify at minimum:
-
-1. Authentication and per-resource authorization.
-2. A centralized tool gateway with scoped credentials and action allowlists.
-3. Strict JSON schemas for every agent input/output handoff.
-4. Secret-manager integration with log and response redaction.
-5. Prompt-injection controls that treat user, retrieved, and agent-generated content as untrusted.
-6. Outbound-network restrictions and SSRF protection.
-7. Dependency, vulnerability, and secret scanning in CI.
-8. Rate, retry, token, concurrency, time, and artifact-size limits.
-9. Immutable audit events for privileged operations.
-10. A blocking release gate for critical/high security findings.
-11. Separate development, staging, and production credentials and environments.
-12. Tested rollback and recovery procedures.
-
-## Suggested repository structure
+## Repository structure
 
 ```text
 src/
-  orchestrator/
-  agents/
-    planner/
-    builder/
-    qa/
-  tools/
-  security/
-  schemas/
+  index.js          CLI entrypoint
+  orchestrator.js   workflow state machine and synthesis
+  agents.js         planner, builder, and QA agents
+  contracts.js      handoff/state validation
+  security.js       redaction and role-scoped tool gateway
 tests/
-docs/
+  orchestrator.test.js
 .github/workflows/
+  ci.yml
+architecture-security-review.json
 ```
 
-## Required automated tests
+## Security model
 
-The first implementation should cover:
+The runtime follows least privilege and treats agent outputs as untrusted until validated. Agents do not receive direct privileged credentials by default. External actions should be exposed only through `ToolGateway`, with per-role allowlists and narrowly scoped handlers. Critical or high QA/security findings must block completion.
 
-- Workflow-state transitions
-- Agent message schema validation
-- Authorization boundaries
-- Tool allowlists
-- Prompt-injection attempts
-- Secret redaction
-- Retry and timeout behavior
-- Failure paths
-- Planner -> Builder -> QA integration
-- QA blocking completion
-- Dependency and secret scans
+This reference implementation does **not** yet connect to an LLM provider, production database, cloud deployment account, or secret manager. Those integrations should be added behind interfaces rather than embedded directly in agent code.
 
-## Current status
+## Production hardening still required
 
-The repository now contains a concrete **reference architecture and security specification**. It is not yet an implemented or deployed multi-agent runtime.
+Before exposing this as a production service, add authentication/authorization, persistent workflow state, immutable audit storage, real secret-manager integration, request/rate/budget limits, outbound-network controls, prompt-injection defenses for retrieved content, production observability, and environment-separated credentials.
 
-The next engineering milestone is to create the orchestrator, typed agent contracts, agent modules, secured tool gateway, automated tests, and CI pipeline described in the JSON specification.
+## CI
+
+CI runs on pushes to `main` and `feature/**` and on pull requests into `main`. It performs syntax validation, the Node test suite, and a high-severity dependency audit.
+
+## Status
+
+**Runnable reference runtime implemented.** The next milestone is provider adapters and persistence, while preserving the existing contracts and security boundaries.
