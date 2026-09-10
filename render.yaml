@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: multi-agent-build
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main
+    autoDeploy: true
+    buildCommand: npm install --ignore-scripts
+    startCommand: npm run service
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: WORKFLOW_STATE_DIR
+        value: /tmp/multi-agent-runs
+      - key: MAX_REPAIR_ATTEMPTS
+        value: "2"
+      - key: MAX_REQUEST_BYTES
+        value: "1048576"
+      - key: SERVICE_API_KEY
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: TARGET_REPOSITORY
+        sync: false
+      - key: TARGET_BRANCH
+        value: feature/agent-build
+      - key: TARGET_BASE
+        value: main
+      - key: AGENT_PROVIDER_URL
+        sync: false
+      - key: AGENT_PROVIDER_API_KEY
+        sync: false
