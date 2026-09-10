@@ -36,7 +36,7 @@ SERVICE_API_KEY="replace-with-a-long-random-secret" npm run service
 Public operational endpoints:
 
 - `GET /health` — process liveness
-- `GET /ready` — state-directory/configuration readiness
+- `GET /ready` — state-storage/configuration readiness
 
 Bearer-authenticated workflow endpoints:
 
@@ -69,11 +69,28 @@ Optional model-provider variables:
 
 Webhook resume requires `GITHUB_WEBHOOK_SECRET`.
 
+## Durable workflow state
+
+The default file backend remains dependency-free for local development and smoke testing. Production can now require durable storage explicitly. When `REQUIRE_DURABLE_STATE=true`, startup fails closed unless `DURABLE_STATE_MOUNT` is configured and `WORKFLOW_STATE_DIR` is inside that mount. `/ready` also performs a real write/delete probe and reports whether durable state is required.
+
+For a Render persistent disk mounted at `/var/data`, configure:
+
+```text
+WORKFLOW_STATE_BACKEND=file
+WORKFLOW_STATE_DIR=/var/data/multi-agent-runs
+DURABLE_STATE_MOUNT=/var/data
+REQUIRE_DURABLE_STATE=true
+```
+
+This protects resumable CI checkpoints and webhook replay claims from silently falling back to ephemeral storage.
+
 ## Implemented controls
 
 - Explicit workflow state machine and bounded Builder -> QA/CI repair loop
 - Runtime validation of agent handoffs
 - Persistent/resumable `awaiting_ci` checkpoints
+- Fail-closed durable-state configuration gate
+- Readiness write/delete probe for state storage
 - Vendor-neutral model provider adapters
 - Controlled repository branch, file, diff, PR, and CI-status operations
 - No direct writes to `main` or `master` through repository handlers
@@ -81,7 +98,7 @@ Webhook resume requires `GITHUB_WEBHOOK_SECRET`.
 - Failed CI checks feed back into Builder for bounded repair
 - Final merge remains explicit human approval
 - Signed GitHub webhook verification using HMAC-SHA256
-- Durable delivery-ID replay protection
+- Durable delivery-ID replay protection when the configured state backend is durable
 - Repository + branch matching for event-driven resume
 - Bearer authentication for workflow APIs
 - Public liveness and readiness endpoints
@@ -95,7 +112,7 @@ Webhook resume requires `GITHUB_WEBHOOK_SECRET`.
 
 Secrets are intentionally not committed. Set at least `SERVICE_API_KEY` in Render. Configure `GITHUB_TOKEN`, `TARGET_REPOSITORY`, and `GITHUB_WEBHOOK_SECRET` only when repository automation and event-driven resume are required.
 
-The included free-plan blueprint stores workflow state under `/tmp/multi-agent-runs`. **That filesystem is ephemeral.** It is suitable for deployment/smoke testing, but long-lived production runs require a persistent Render disk or an external durable state store before the service should be considered production-durable.
+The free-plan blueprint intentionally remains in smoke-test mode under `/tmp/multi-agent-runs` with `REQUIRE_DURABLE_STATE=false`. For production durability, attach a persistent disk, move `WORKFLOW_STATE_DIR` under its mount, and set `REQUIRE_DURABLE_STATE=true`. The service will then refuse to start if it is accidentally pointed back at ephemeral storage.
 
 ## Security model
 
@@ -105,6 +122,6 @@ Production credentials and webhook secrets must be supplied externally. The runt
 
 ## Current status
 
-**v0.7.0: authenticated hosted service layer with GitHub REST integration, health/readiness checks, signed event-driven CI resume, and Render deployment configuration.**
+**v0.8.0: hosted workflow service with explicit durable-state enforcement, storage readiness probing, signed event-driven CI resume, and human-only final merge.**
 
-Further production hardening should move workflow state to durable managed storage, add per-user authorization/rate limits, immutable centralized audit storage, a managed secret store, stronger prompt-injection defenses, sandboxed build execution, and detailed CI log ingestion.
+The current live free Render service remains smoke-test durable until a persistent disk is attached. Further production hardening should add per-user authorization/rate limits, immutable centralized audit storage, a managed secret store, stronger prompt-injection defenses, sandboxed build execution, and detailed CI log ingestion.
