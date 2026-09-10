@@ -12,31 +12,30 @@ function uniqueSources(executedTools = []) {
       const url = String(item?.url || '').trim();
       if (!url || seen.has(url)) continue;
       seen.add(url);
-      sources.push({
-        title: String(item?.title || url),
-        url,
-        snippet: String(item?.content || '').slice(0, 1000),
-        score: Number.isFinite(Number(item?.score)) ? Number(item.score) : null
-      });
+      sources.push({ title: String(item?.title || url), url, snippet: String(item?.content || '').slice(0, 1000), score: Number.isFinite(Number(item?.score)) ? Number(item.score) : null });
     }
   }
   return sources.slice(0, 12);
 }
 
-const ROLE_TOKEN_BUDGETS = Object.freeze({
-  dynamic_planner: 650,
-  specialist: 900,
-  judge: 1400,
-  dynamic_qa: 900,
-  planner: 900,
-  builder: 1800,
-  qa: 900
-});
+const ROLE_TOKEN_BUDGETS = Object.freeze({ dynamic_planner: 650, specialist: 900, judge: 1400, dynamic_qa: 900, planner: 900, builder: 1800, qa: 900 });
 
 export class MultiProvider {
   constructor({ providers = [] } = {}) {
     this.providers = providers.filter(Boolean);
     if (!this.providers.length) throw new Error('At least one model provider is required');
+  }
+
+  names() { return this.providers.map(provider => provider.name).filter(Boolean); }
+
+  select(name = 'auto') {
+    const choice = String(name || 'auto').trim().toLowerCase();
+    if (!choice || choice === 'auto') return this;
+    const aliases = { groq: 'groq', nvidia: 'nvidia-nim', 'nvidia-nim': 'nvidia-nim', nim: 'nvidia-nim' };
+    const target = aliases[choice] || choice;
+    const provider = this.providers.find(item => item.name === target);
+    if (!provider) throw Object.assign(new Error(`Selected provider is not configured: ${choice}`), { statusCode: 400 });
+    return provider;
   }
 
   async generate(request) {
@@ -85,37 +84,16 @@ export class OpenAICompatibleProvider {
     return `${schemas[agentRole] || 'Return ONLY valid JSON.'}\n\nINPUT:\n${JSON.stringify(input)}`;
   }
 
-  tokenBudget(agentRole) {
-    return Math.min(this.maxTokens, ROLE_TOKEN_BUDGETS[agentRole] || this.maxTokens);
-  }
+  tokenBudget(agentRole) { return Math.min(this.maxTokens, ROLE_TOKEN_BUDGETS[agentRole] || this.maxTokens); }
 
   async generate({ agentRole, input }) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    const body = {
-      model: this.model,
-      messages: [
-        { role: 'system', content: 'You are one stage in an autonomous multi-agent workflow. Follow the requested JSON contract exactly. Do not wrap JSON in markdown. Never fabricate browsing, citations, tool use, or external verification.' },
-        { role: 'user', content: this.instruction(agentRole, input) }
-      ],
-      temperature: this.temperature,
-      max_tokens: this.tokenBudget(agentRole),
-      stream: false
-    };
+    const body = { model: this.model, messages: [{ role: 'system', content: 'You are one stage in an autonomous multi-agent workflow. Follow the requested JSON contract exactly. Do not wrap JSON in markdown. Never fabricate browsing, citations, tool use, or external verification.' }, { role: 'user', content: this.instruction(agentRole, input) }], temperature: this.temperature, max_tokens: this.tokenBudget(agentRole), stream: false };
     if (this.jsonMode) body.response_format = { type: 'json_object' };
-
     try {
-      const response = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json', accept: 'application/json' },
-        redirect: 'error',
-        signal: controller.signal,
-        body: JSON.stringify(body)
-      });
-      if (!response.ok) {
-        const retryAfter = response.headers?.get?.('retry-after');
-        throw new Error(`HTTP ${response.status}${retryAfter ? ` retry-after=${retryAfter}` : ''}`);
-      }
+      const response = await fetch(this.endpoint, { method: 'POST', headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json', accept: 'application/json' }, redirect: 'error', signal: controller.signal, body: JSON.stringify(body) });
+      if (!response.ok) { const retryAfter = response.headers?.get?.('retry-after'); throw new Error(`HTTP ${response.status}${retryAfter ? ` retry-after=${retryAfter}` : ''}`); }
       const data = await response.json();
       const content = data?.choices?.[0]?.message?.content;
       if (!content) throw new Error('empty model response');
@@ -124,60 +102,28 @@ export class OpenAICompatibleProvider {
       catch { throw new Error('model response was not valid JSON'); }
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('model response was not a JSON object');
       return parsed;
-    } finally {
-      clearTimeout(timer);
-    }
+    } finally { clearTimeout(timer); }
   }
 }
 
 export class GroqProvider extends OpenAICompatibleProvider {
-  constructor({ apiKey, model = 'openai/gpt-oss-120b', ...rest } = {}) {
-    super({ endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey, model, name: 'groq', jsonMode: true, ...rest });
-  }
-
+  constructor({ apiKey, model = 'openai/gpt-oss-120b', ...rest } = {}) { super({ endpoint: 'https://api.groq.com/openai/v1/chat/completions', apiKey, model, name: 'groq', jsonMode: true, ...rest }); }
   async research({ goal }) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 60000));
     try {
-      const response = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          'content-type': 'application/json',
-          accept: 'application/json',
-          'Groq-Model-Version': 'latest'
-        },
-        redirect: 'error',
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: 'groq/compound',
-          messages: [
-            { role: 'system', content: 'Research the user request using real web sources. Prefer primary and authoritative sources. Distinguish verified facts from uncertainty. Keep citations in the answer.' },
-            { role: 'user', content: String(goal || '') }
-          ],
-          compound_custom: { tools: { enabled_tools: ['web_search', 'visit_website'] } },
-          stream: false
-        })
-      });
+      const response = await fetch(this.endpoint, { method: 'POST', headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json', accept: 'application/json', 'Groq-Model-Version': 'latest' }, redirect: 'error', signal: controller.signal, body: JSON.stringify({ model: 'groq/compound', messages: [{ role: 'system', content: 'Research the user request using real web sources. Prefer primary and authoritative sources. Distinguish verified facts from uncertainty. Keep citations in the answer.' }, { role: 'user', content: String(goal || '') }], compound_custom: { tools: { enabled_tools: ['web_search', 'visit_website'] } }, stream: false }) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const message = data?.choices?.[0]?.message;
       if (!message?.content) throw new Error('empty research response');
-      return {
-        answer: String(message.content),
-        sources: uniqueSources(message.executed_tools || []),
-        provider: 'groq/compound'
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+      return { answer: String(message.content), sources: uniqueSources(message.executed_tools || []), provider: 'groq/compound' };
+    } finally { clearTimeout(timer); }
   }
 }
 
 export class NvidiaNimProvider extends OpenAICompatibleProvider {
-  constructor({ apiKey, model = 'meta/llama-3.1-70b-instruct', ...rest } = {}) {
-    super({ endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', apiKey, model, name: 'nvidia-nim', jsonMode: false, ...rest });
-  }
+  constructor({ apiKey, model = 'meta/llama-3.1-70b-instruct', ...rest } = {}) { super({ endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', apiKey, model, name: 'nvidia-nim', jsonMode: false, ...rest }); }
 }
 
 export function createModelProviderFromEnvironment(env = process.env) {
