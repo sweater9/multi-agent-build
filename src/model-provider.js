@@ -40,9 +40,7 @@ export class MultiProvider {
       dashscope: 'alibaba',
       qwen: 'alibaba',
       gemini: 'gemini',
-      google: 'gemini',
-      apinex: 'apinex',
-      'apinex.bond': 'apinex'
+      google: 'gemini'
     };
     const target = aliases[choice] || choice;
     const provider = this.providers.find(item => item.name === target);
@@ -150,18 +148,11 @@ export class GeminiProvider extends OpenAICompatibleProvider {
   }
 }
 
-export class ApinexProvider extends OpenAICompatibleProvider {
-  constructor({ apiKey, model = 'gpt-5-6-terra', ...rest } = {}) {
-    super({ endpoint: 'https://api.apinex.bond/v1/chat/completions', apiKey, model, name: 'apinex', jsonMode: false, ...rest });
-  }
-}
-
 export function createModelProviderFromEnvironment(env = process.env) {
   const groqKey = String(env.GROQ_API_KEY || env.GROQ_KEY || '').trim();
   const nvidiaKey = String(env.NVIDIA_NIM_API_KEY || env.NVIDIA_API_KEY || env.NIM_API_KEY || '').trim();
   const alibabaKey = String(env.ALIBABA_API_KEY || env.DASHSCOPE_API_KEY || '').trim();
   const geminiKey = String(env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '').trim();
-  const apinexKey = String(env.APINEX_API_KEY || '').trim();
   const timeoutMs = Number(env.AGENT_PROVIDER_TIMEOUT_MS || 45000);
   const maxTokens = Number(env.AGENT_PROVIDER_MAX_TOKENS || 4000);
   const providers = [];
@@ -169,6 +160,5 @@ export function createModelProviderFromEnvironment(env = process.env) {
   if (nvidiaKey) providers.push(new NvidiaNimProvider({ apiKey: nvidiaKey, model: String(env.NVIDIA_NIM_MODEL || env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct').trim(), timeoutMs, maxTokens }));
   if (alibabaKey) providers.push(new AlibabaProvider({ apiKey: alibabaKey, model: String(env.ALIBABA_MODEL || env.DASHSCOPE_MODEL || 'qwen-plus').trim(), endpoint: String(env.ALIBABA_ENDPOINT || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions').trim(), timeoutMs, maxTokens }));
   if (geminiKey) providers.push(new GeminiProvider({ apiKey: geminiKey, model: String(env.GEMINI_MODEL || 'gemini-3.8-flash').trim(), timeoutMs, maxTokens }));
-  if (apinexKey) providers.push(new ApinexProvider({ apiKey: apinexKey, model: String(env.APINEX_MODEL || 'gpt-5-6-terra').trim(), timeoutMs, maxTokens }));
   return providers.length ? new MultiProvider({ providers }) : null;
 }
