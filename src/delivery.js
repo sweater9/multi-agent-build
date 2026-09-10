@@ -22,14 +22,9 @@ export function evaluateCiStatus(ci) {
   if (TERMINAL_FAILURE.has(overall)) {
     return { ready: false, pending: false, findings: [{ severity: 'high', code: 'CI_FAILED', message: `CI reported ${overall}.` }] };
   }
-  if (NON_TERMINAL.has(overall)) {
-    return { ready: false, pending: true, findings: [] };
-  }
+  if (NON_TERMINAL.has(overall)) return { ready: false, pending: true, findings: [] };
 
-  const failedChecks = checks.filter((check) => {
-    const state = normalizeState(check.conclusion || check.status || check.state);
-    return TERMINAL_FAILURE.has(state);
-  });
+  const failedChecks = checks.filter((check) => TERMINAL_FAILURE.has(normalizeState(check.conclusion || check.status || check.state)));
   if (failedChecks.length) {
     return {
       ready: false,
@@ -49,11 +44,7 @@ export function evaluateCiStatus(ci) {
     return { ready: true, pending: false, findings: [] };
   }
 
-  return {
-    ready: false,
-    pending: false,
-    findings: [{ severity: 'high', code: 'CI_STATUS_UNKNOWN', message: 'CI did not return a verifiable terminal success state.' }]
-  };
+  return { ready: false, pending: false, findings: [{ severity: 'high', code: 'CI_STATUS_UNKNOWN', message: 'CI did not return a verifiable terminal success state.' }] };
 }
 
 export class DeliveryGate {
@@ -67,7 +58,11 @@ export class DeliveryGate {
     this.pullRequest = null;
   }
 
-  async ensurePullRequest() {
+  async ensurePullRequest(existingPullRequest = null) {
+    if (existingPullRequest) {
+      this.pullRequest = existingPullRequest;
+      return existingPullRequest;
+    }
     if (this.pullRequest) return this.pullRequest;
     this.pullRequest = await this.toolGateway.invoke('release', 'repo.open_pr', {
       repository: this.repositoryTarget.repository,
@@ -79,14 +74,9 @@ export class DeliveryGate {
     return this.pullRequest;
   }
 
-  async review({ qa }) {
+  async review({ qa, existingPullRequest = null }) {
     if (!qa?.approved || hasBlockingFinding(qa.findings)) {
-      return {
-        ready: false,
-        pending: false,
-        pull_request: null,
-        findings: [{ severity: 'high', code: 'QA_NOT_APPROVED', message: 'QA must approve before delivery checks run.' }]
-      };
+      return { ready: false, pending: false, pull_request: null, findings: [{ severity: 'high', code: 'QA_NOT_APPROVED', message: 'QA must approve before delivery checks run.' }] };
     }
 
     const diff = await this.toolGateway.invoke('release', 'repo.compare', {
@@ -95,15 +85,10 @@ export class DeliveryGate {
       head: this.repositoryTarget.branch
     });
     if (!diff || !Array.isArray(diff.files) || diff.files.length === 0) {
-      return {
-        ready: false,
-        pending: false,
-        pull_request: null,
-        findings: [{ severity: 'high', code: 'NO_REVIEWABLE_DIFF', message: 'No reviewable repository diff exists.' }]
-      };
+      return { ready: false, pending: false, pull_request: null, findings: [{ severity: 'high', code: 'NO_REVIEWABLE_DIFF', message: 'No reviewable repository diff exists.' }] };
     }
 
-    const pullRequest = await this.ensurePullRequest();
+    const pullRequest = await this.ensurePullRequest(existingPullRequest);
     const ci = await this.toolGateway.invoke('release', 'repo.ci_status', {
       repository: this.repositoryTarget.repository,
       ref: this.repositoryTarget.branch
