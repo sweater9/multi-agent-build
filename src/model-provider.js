@@ -31,7 +31,19 @@ export class MultiProvider {
   select(name = 'auto') {
     const choice = String(name || 'auto').trim().toLowerCase();
     if (!choice || choice === 'auto') return this;
-    const aliases = { groq: 'groq', nvidia: 'nvidia-nim', 'nvidia-nim': 'nvidia-nim', nim: 'nvidia-nim' };
+    const aliases = {
+      groq: 'groq',
+      nvidia: 'nvidia-nim',
+      'nvidia-nim': 'nvidia-nim',
+      nim: 'nvidia-nim',
+      alibaba: 'alibaba',
+      dashscope: 'alibaba',
+      qwen: 'alibaba',
+      gemini: 'gemini',
+      google: 'gemini',
+      apinex: 'apinex',
+      'apinex.bond': 'apinex'
+    };
     const target = aliases[choice] || choice;
     const provider = this.providers.find(item => item.name === target);
     if (!provider) throw Object.assign(new Error(`Selected provider is not configured: ${choice}`), { statusCode: 400 });
@@ -126,11 +138,37 @@ export class NvidiaNimProvider extends OpenAICompatibleProvider {
   constructor({ apiKey, model = 'meta/llama-3.1-70b-instruct', ...rest } = {}) { super({ endpoint: 'https://integrate.api.nvidia.com/v1/chat/completions', apiKey, model, name: 'nvidia-nim', jsonMode: false, ...rest }); }
 }
 
+export class AlibabaProvider extends OpenAICompatibleProvider {
+  constructor({ apiKey, model = 'qwen-plus', endpoint = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', ...rest } = {}) {
+    super({ endpoint, apiKey, model, name: 'alibaba', jsonMode: false, ...rest });
+  }
+}
+
+export class GeminiProvider extends OpenAICompatibleProvider {
+  constructor({ apiKey, model = 'gemini-3.8-flash', ...rest } = {}) {
+    super({ endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKey, model, name: 'gemini', jsonMode: false, ...rest });
+  }
+}
+
+export class ApinexProvider extends OpenAICompatibleProvider {
+  constructor({ apiKey, model = 'gpt-5-6-terra', ...rest } = {}) {
+    super({ endpoint: 'https://api.apinex.bond/v1/chat/completions', apiKey, model, name: 'apinex', jsonMode: false, ...rest });
+  }
+}
+
 export function createModelProviderFromEnvironment(env = process.env) {
   const groqKey = String(env.GROQ_API_KEY || env.GROQ_KEY || '').trim();
   const nvidiaKey = String(env.NVIDIA_NIM_API_KEY || env.NVIDIA_API_KEY || env.NIM_API_KEY || '').trim();
+  const alibabaKey = String(env.ALIBABA_API_KEY || env.DASHSCOPE_API_KEY || '').trim();
+  const geminiKey = String(env.GEMINI_API_KEY || env.GOOGLE_API_KEY || '').trim();
+  const apinexKey = String(env.APINEX_API_KEY || '').trim();
+  const timeoutMs = Number(env.AGENT_PROVIDER_TIMEOUT_MS || 45000);
+  const maxTokens = Number(env.AGENT_PROVIDER_MAX_TOKENS || 4000);
   const providers = [];
-  if (groqKey) providers.push(new GroqProvider({ apiKey: groqKey, model: String(env.GROQ_MODEL || 'openai/gpt-oss-120b').trim(), timeoutMs: Number(env.AGENT_PROVIDER_TIMEOUT_MS || 45000), maxTokens: Number(env.AGENT_PROVIDER_MAX_TOKENS || 4000) }));
-  if (nvidiaKey) providers.push(new NvidiaNimProvider({ apiKey: nvidiaKey, model: String(env.NVIDIA_NIM_MODEL || env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct').trim(), timeoutMs: Number(env.AGENT_PROVIDER_TIMEOUT_MS || 45000), maxTokens: Number(env.AGENT_PROVIDER_MAX_TOKENS || 4000) }));
+  if (groqKey) providers.push(new GroqProvider({ apiKey: groqKey, model: String(env.GROQ_MODEL || 'openai/gpt-oss-120b').trim(), timeoutMs, maxTokens }));
+  if (nvidiaKey) providers.push(new NvidiaNimProvider({ apiKey: nvidiaKey, model: String(env.NVIDIA_NIM_MODEL || env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct').trim(), timeoutMs, maxTokens }));
+  if (alibabaKey) providers.push(new AlibabaProvider({ apiKey: alibabaKey, model: String(env.ALIBABA_MODEL || env.DASHSCOPE_MODEL || 'qwen-plus').trim(), endpoint: String(env.ALIBABA_ENDPOINT || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions').trim(), timeoutMs, maxTokens }));
+  if (geminiKey) providers.push(new GeminiProvider({ apiKey: geminiKey, model: String(env.GEMINI_MODEL || 'gemini-3.8-flash').trim(), timeoutMs, maxTokens }));
+  if (apinexKey) providers.push(new ApinexProvider({ apiKey: apinexKey, model: String(env.APINEX_MODEL || 'gpt-5-6-terra').trim(), timeoutMs, maxTokens }));
   return providers.length ? new MultiProvider({ providers }) : null;
 }
