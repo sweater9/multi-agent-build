@@ -1,0 +1,25 @@
+{
+  "workflow_status": "completed",
+  "project_title": "multi-agent-build",
+  "agents": [
+    {
+      "agent_id": "planner_01",
+      "agent_role": "System Planner",
+      "status": "success",
+      "output": "Detailed high-level architecture design"
+    },
+    {
+      "agent_id": "builder_02",
+      "agent_role": "Core Builder",
+      "status": "success",
+      "output": "High-level architectural blueprint"
+    },
+    {
+      "agent_id": "qa_03",
+      "agent_role": "QA & Security Auditor",
+      "status": "success",
+      "output": "Security review and code check"
+    }
+  ],
+  "final_synthesized_result": "The final unified production-ready output assembled for the end user display"
+}
