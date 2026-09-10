@@ -14,10 +14,15 @@ function assertFeatureBranch(branch, allowedBranches) {
   if (branch === 'main' || branch === 'master') throw new Error('Direct writes to protected base branch are not allowed');
 }
 
+function assertBaseBranch(branch, allowedBaseBranches) {
+  assertAllowed(branch, allowedBaseBranches, 'Base branch');
+}
+
 export function createRepositoryHandlers({
   client,
   allowedRepositories = [],
-  allowedBranches = ['feature/agent-build']
+  allowedBranches = ['feature/agent-build'],
+  allowedBaseBranches = ['main']
 } = {}) {
   if (!client) throw new Error('repository client is required');
 
@@ -31,11 +36,13 @@ export function createRepositoryHandlers({
     async 'repo.create_branch'({ repository, branch, base = 'main' }) {
       assertAllowed(repository, allowedRepositories, 'Repository');
       assertFeatureBranch(branch, allowedBranches);
+      assertBaseBranch(base, allowedBaseBranches);
       return client.createBranch({ repository, branch, base });
     },
 
     async 'repo.compare'({ repository, base = 'main', head }) {
       assertAllowed(repository, allowedRepositories, 'Repository');
+      assertBaseBranch(base, allowedBaseBranches);
       assertFeatureBranch(head, allowedBranches);
       return client.compare({ repository, base, head });
     },
@@ -56,6 +63,20 @@ export function createRepositoryHandlers({
       if (typeof content !== 'string') throw new Error('content must be a string');
       if (!message || !sha) throw new Error('commit message and sha are required');
       return client.updateFile({ repository, branch, path, content, message, sha });
+    },
+
+    async 'repo.open_pr'({ repository, base = 'main', head, title, body = '' }) {
+      assertAllowed(repository, allowedRepositories, 'Repository');
+      assertBaseBranch(base, allowedBaseBranches);
+      assertFeatureBranch(head, allowedBranches);
+      if (typeof title !== 'string' || !title.trim()) throw new Error('PR title is required');
+      return client.openPullRequest({ repository, base, head, title: title.trim(), body });
+    },
+
+    async 'repo.ci_status'({ repository, ref }) {
+      assertAllowed(repository, allowedRepositories, 'Repository');
+      assertFeatureBranch(ref, allowedBranches);
+      return client.getCiStatus({ repository, ref });
     }
   };
 }
@@ -63,5 +84,6 @@ export function createRepositoryHandlers({
 export const DEFAULT_TOOL_ALLOWLIST = Object.freeze({
   planner: ['repo.read_file'],
   builder: ['repo.read_file', 'repo.create_branch', 'repo.create_file', 'repo.update_file', 'repo.compare'],
-  qa: ['repo.read_file', 'repo.compare']
+  qa: ['repo.read_file', 'repo.compare'],
+  release: ['repo.compare', 'repo.open_pr', 'repo.ci_status']
 });
