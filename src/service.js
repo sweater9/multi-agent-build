@@ -12,6 +12,47 @@ function json(res, status, body, extraHeaders = {}) {
   res.end(JSON.stringify(body));
 }
 
+function html(res, status, body) {
+  res.writeHead(status, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    'referrer-policy': 'no-referrer'
+  });
+  res.end(body);
+}
+
+function landingPage() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Multi-Agent Build</title>
+  <style>
+    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b1020;color:#eef2ff;min-height:100vh;display:grid;place-items:center;padding:32px}.card{width:min(760px,100%);background:#121a2f;border:1px solid #293453;border-radius:22px;padding:34px;box-shadow:0 24px 70px rgba(0,0,0,.28)}.eyebrow{font-size:.78rem;letter-spacing:.12em;text-transform:uppercase;color:#93c5fd;font-weight:700}.status{display:inline-flex;align-items:center;gap:9px;margin-top:18px;padding:8px 12px;border-radius:999px;background:#10281e;color:#86efac;font-weight:700;font-size:.9rem}.dot{width:9px;height:9px;border-radius:50%;background:#22c55e}h1{font-size:clamp(2rem,5vw,3.4rem);line-height:1.02;margin:18px 0 12px}p{color:#cbd5e1;line-height:1.7;font-size:1.03rem}.flow{margin-top:24px;padding:18px;border-radius:14px;background:#0d1528;border:1px solid #25304d;color:#bfdbfe;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9rem;overflow-wrap:anywhere}.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:24px}.meta div{padding:15px;border-radius:12px;background:#0d1528;border:1px solid #25304d}.meta strong{display:block;color:#f8fafc;margin-bottom:5px}.meta span{color:#94a3b8;font-size:.9rem}.note{margin-top:24px;font-size:.92rem;color:#94a3b8}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">Multi-Agent Build</div>
+    <div class="status"><span class="dot"></span> Service online</div>
+    <h1>Secure multi-agent software delivery.</h1>
+    <p>This hosted service coordinates planning, controlled building, QA, pull-request delivery, CI checks, bounded repair, and resumable workflows. Workflow APIs remain protected by bearer authentication.</p>
+    <div class="flow">PLAN → BUILD → QA → PR → CI → RESUME / REPAIR → READY FOR HUMAN MERGE</div>
+    <section class="meta">
+      <div><strong>Health</strong><span>/health</span></div>
+      <div><strong>Readiness</strong><span>/ready</span></div>
+      <div><strong>Workflow API</strong><span>Authenticated</span></div>
+      <div><strong>Final merge</strong><span>Human approval only</span></div>
+    </section>
+    <p class="note">The browser landing page is public; operational workflow endpoints remain private by design.</p>
+  </main>
+</body>
+</html>`;
+}
+
 function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -77,6 +118,10 @@ export function createService({
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url || '/', 'http://localhost');
+
+      if (req.method === 'GET' && url.pathname === '/') {
+        return html(res, 200, landingPage());
+      }
 
       if (req.method === 'GET' && url.pathname === '/health') {
         return json(res, 200, { ok: true, service: 'multi-agent-build' });

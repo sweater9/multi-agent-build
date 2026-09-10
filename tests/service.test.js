@@ -32,6 +32,18 @@ function fixture() {
   return { orchestrator, stateStore };
 }
 
+test('root landing page is public and browser-friendly', async () => {
+  const runtime = fixture();
+  await withServer({ ...runtime, apiKey: 'x'.repeat(24) }, async (base) => {
+    const response = await fetch(base);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') || '', /text\/html/);
+    const body = await response.text();
+    assert.match(body, /Multi-Agent Build/);
+    assert.match(body, /Service online/);
+  });
+});
+
 test('health and readiness are public', async () => {
   const runtime = fixture();
   await withServer({ ...runtime, apiKey: 'x'.repeat(24), readinessCheck: async () => ({ ok: true, mode: 'test' }) }, async (base) => {
