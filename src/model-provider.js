@@ -23,6 +23,16 @@ function uniqueSources(executedTools = []) {
   return sources.slice(0, 12);
 }
 
+const ROLE_TOKEN_BUDGETS = Object.freeze({
+  dynamic_planner: 650,
+  specialist: 900,
+  judge: 1400,
+  dynamic_qa: 900,
+  planner: 900,
+  builder: 1800,
+  qa: 900
+});
+
 export class MultiProvider {
   constructor({ providers = [] } = {}) {
     this.providers = providers.filter(Boolean);
@@ -75,6 +85,10 @@ export class OpenAICompatibleProvider {
     return `${schemas[agentRole] || 'Return ONLY valid JSON.'}\n\nINPUT:\n${JSON.stringify(input)}`;
   }
 
+  tokenBudget(agentRole) {
+    return Math.min(this.maxTokens, ROLE_TOKEN_BUDGETS[agentRole] || this.maxTokens);
+  }
+
   async generate({ agentRole, input }) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -85,7 +99,7 @@ export class OpenAICompatibleProvider {
         { role: 'user', content: this.instruction(agentRole, input) }
       ],
       temperature: this.temperature,
-      max_tokens: this.maxTokens,
+      max_tokens: this.tokenBudget(agentRole),
       stream: false
     };
     if (this.jsonMode) body.response_format = { type: 'json_object' };
@@ -98,7 +112,10 @@ export class OpenAICompatibleProvider {
         signal: controller.signal,
         body: JSON.stringify(body)
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) {
+        const retryAfter = response.headers?.get?.('retry-after');
+        throw new Error(`HTTP ${response.status}${retryAfter ? ` retry-after=${retryAfter}` : ''}`);
+      }
       const data = await response.json();
       const content = data?.choices?.[0]?.message?.content;
       if (!content) throw new Error('empty model response');
