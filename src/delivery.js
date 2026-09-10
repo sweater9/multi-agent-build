@@ -75,27 +75,34 @@ export class DeliveryGate {
   }
 
   async review({ qa, existingPullRequest = null }) {
+    const target = {
+      repository: this.repositoryTarget.repository,
+      base: this.repositoryTarget.base || 'main',
+      branch: this.repositoryTarget.branch
+    };
+
     if (!qa?.approved || hasBlockingFinding(qa.findings)) {
-      return { ready: false, pending: false, pull_request: null, findings: [{ severity: 'high', code: 'QA_NOT_APPROVED', message: 'QA must approve before delivery checks run.' }] };
+      return { target, ready: false, pending: false, pull_request: null, findings: [{ severity: 'high', code: 'QA_NOT_APPROVED', message: 'QA must approve before delivery checks run.' }] };
     }
 
     const diff = await this.toolGateway.invoke('release', 'repo.compare', {
-      repository: this.repositoryTarget.repository,
-      base: this.repositoryTarget.base || 'main',
-      head: this.repositoryTarget.branch
+      repository: target.repository,
+      base: target.base,
+      head: target.branch
     });
     if (!diff || !Array.isArray(diff.files) || diff.files.length === 0) {
-      return { ready: false, pending: false, pull_request: null, findings: [{ severity: 'high', code: 'NO_REVIEWABLE_DIFF', message: 'No reviewable repository diff exists.' }] };
+      return { target, ready: false, pending: false, pull_request: null, findings: [{ severity: 'high', code: 'NO_REVIEWABLE_DIFF', message: 'No reviewable repository diff exists.' }] };
     }
 
     const pullRequest = await this.ensurePullRequest(existingPullRequest);
     const ci = await this.toolGateway.invoke('release', 'repo.ci_status', {
-      repository: this.repositoryTarget.repository,
-      ref: this.repositoryTarget.branch
+      repository: target.repository,
+      ref: target.branch
     });
     const evaluation = evaluateCiStatus(ci);
 
     return {
+      target,
       ...evaluation,
       pull_request: pullRequest,
       ci_status: ci,
