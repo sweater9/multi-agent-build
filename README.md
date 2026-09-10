@@ -48,7 +48,7 @@ GitHub webhook endpoint:
 
 - `POST /webhooks/github` — independently authenticated with `X-Hub-Signature-256`
 
-The API compares bearer secrets in constant time after hashing. Request bodies are bounded, API responses disable caching, and error responses do not expose internal stack traces.
+The API compares bearer secrets in constant time after hashing. Authenticated API traffic is protected by a per-client sliding-window limiter. Request bodies are bounded, API responses disable caching, and error responses do not expose internal stack traces.
 
 ## Repository automation
 
@@ -57,32 +57,45 @@ Repository automation is optional and configured only through environment variab
 Required variables for repository automation:
 
 - `GITHUB_TOKEN`
-- `TARGET_REPOSITORY` (for example `owner/repo`)
+- `TARGET_REPOSITORY`
 - `TARGET_BRANCH` (defaults to `feature/agent-build`)
 - `TARGET_BASE` (defaults to `main`)
 
-Optional model-provider variables:
+The real GitHub client now exposes the same `getCiStatus()` contract expected by repository handlers, eliminating a production-only mock mismatch. CI status records also retain bounded workflow IDs/URLs and the client can retrieve bounded failed-step diagnostics for a selected workflow run.
+
+## Provider network controls
+
+Remote model providers are optional. When configured, HTTPS is required by default, redirects are rejected, response content type must be JSON, response size is bounded, timeout is bounded, and an explicit provider-host allowlist can be supplied.
+
+Variables:
 
 - `AGENT_PROVIDER_URL`
 - `AGENT_PROVIDER_API_KEY`
 - `AGENT_PROVIDER_TIMEOUT_MS`
+- `AGENT_PROVIDER_MAX_RESPONSE_BYTES`
+- `AGENT_PROVIDER_ALLOWED_HOSTS` — comma-separated hostname allowlist
 
-Webhook resume requires `GITHUB_WEBHOOK_SECRET`.
+Plain HTTP is disabled by default and should only be enabled for controlled local development.
 
 ## Durable workflow state
 
-The default file backend remains dependency-free for local development and smoke testing. Production can now require durable storage explicitly. When `REQUIRE_DURABLE_STATE=true`, startup fails closed unless `DURABLE_STATE_MOUNT` is configured and `WORKFLOW_STATE_DIR` is inside that mount. `/ready` also performs a real write/delete probe and reports whether durable state is required.
+The default file backend remains dependency-free for local development and smoke testing. Production can require durable storage explicitly. When `REQUIRE_DURABLE_STATE=true`, startup fails closed unless `DURABLE_STATE_MOUNT` is configured and `WORKFLOW_STATE_DIR` is inside that mount. `/ready` performs a real write/delete probe.
 
-For a Render persistent disk mounted at `/var/data`, configure:
+For a persistent disk mounted at `/var/data`:
 
 ```text
 WORKFLOW_STATE_BACKEND=file
 WORKFLOW_STATE_DIR=/var/data/multi-agent-runs
+AUDIT_LOG_DIR=/var/data/multi-agent-runs/audit
 DURABLE_STATE_MOUNT=/var/data
 REQUIRE_DURABLE_STATE=true
 ```
 
-This protects resumable CI checkpoints and webhook replay claims from silently falling back to ephemeral storage.
+## Audit trail
+
+Hosted workflow events are additionally written to an append-only NDJSON audit file with a SHA-256 hash chain. Each entry records the previous entry hash, making accidental or unauthorized historical modification detectable. Audit storage inherits the durability characteristics of its configured directory.
+
+Recorded service events include authentication failures, rate-limit events, workflow starts/resumes, and GitHub webhook acceptance outcomes. Secrets and bearer tokens are not written into these records.
 
 ## Implemented controls
 
@@ -91,9 +104,14 @@ This protects resumable CI checkpoints and webhook replay claims from silently f
 - Persistent/resumable `awaiting_ci` checkpoints
 - Fail-closed durable-state configuration gate
 - Readiness write/delete probe for state storage
-- Vendor-neutral model provider adapters
+- Per-client API request limiting with `429` + `Retry-After`
+- Hash-chained append-only audit records
+- HTTPS-only remote provider endpoints by default
+- Provider host allowlist, redirect rejection, response-size/content-type/timeout bounds
 - Controlled repository branch, file, diff, PR, and CI-status operations
-- No direct writes to `main` or `master` through repository handlers
+- Real GitHub client/repository-handler CI contract alignment
+- Bounded CI failed-step diagnostic hook
+- No direct writes to `main` or `master` through agent repository handlers
 - CI must reach terminal success before `ready_for_merge: true`
 - Failed CI checks feed back into Builder for bounded repair
 - Final merge remains explicit human approval
@@ -110,18 +128,16 @@ This protects resumable CI checkpoints and webhook replay claims from silently f
 
 `render.yaml` provides a Frankfurt Node web-service blueprint using `npm run service` and `/health` as the service health check.
 
-Secrets are intentionally not committed. Set at least `SERVICE_API_KEY` in Render. Configure `GITHUB_TOKEN`, `TARGET_REPOSITORY`, and `GITHUB_WEBHOOK_SECRET` only when repository automation and event-driven resume are required.
-
-The free-plan blueprint intentionally remains in smoke-test mode under `/tmp/multi-agent-runs` with `REQUIRE_DURABLE_STATE=false`. For production durability, attach a persistent disk, move `WORKFLOW_STATE_DIR` under its mount, and set `REQUIRE_DURABLE_STATE=true`. The service will then refuse to start if it is accidentally pointed back at ephemeral storage.
+The free-plan deployment intentionally remains smoke-test mode under `/tmp/multi-agent-runs`. For production durability, attach a persistent disk and switch the state/audit paths under its mount with `REQUIRE_DURABLE_STATE=true`.
 
 ## Security model
 
-The runtime follows least privilege and treats user, provider, retrieved, agent-generated, and webhook content as untrusted. Privileged actions are exposed only through narrowly scoped handlers and per-role tool allowlists. Target repositories and branches are explicitly allowlisted, base branches are separately allowlisted, and high/critical QA or CI findings prevent completion.
+The runtime follows least privilege and treats user, provider, retrieved, agent-generated, webhook, and CI content as untrusted. Privileged actions are exposed only through narrowly scoped handlers and per-role tool allowlists. Target repositories and branches are explicitly allowlisted, base branches are separately allowlisted, and high/critical QA or CI findings prevent completion.
 
 Production credentials and webhook secrets must be supplied externally. The runtime contains no autonomous merge action.
 
 ## Current status
 
-**v0.8.0: hosted workflow service with explicit durable-state enforcement, storage readiness probing, signed event-driven CI resume, and human-only final merge.**
+**v0.9.0: hosted workflow service with request throttling, hash-chained audit records, provider network hardening, CI client contract fixes, durable-state enforcement, signed CI resume, and human-only final merge.**
 
-The current live free Render service remains smoke-test durable until a persistent disk is attached. Further production hardening should add per-user authorization/rate limits, immutable centralized audit storage, a managed secret store, stronger prompt-injection defenses, sandboxed build execution, and detailed CI log ingestion.
+The current live free Render service remains smoke-test durable until paid persistent storage is attached. Further production work should focus on persistent infrastructure, per-user authorization, sandboxed build execution, centralized immutable audit storage, and richer CI remediation context.

@@ -1,11 +1,13 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { SlidingWindowRateLimiter } from './rate-limit.js';
 
-function json(res, status, body) {
+function json(res, status, body, extraHeaders = {}) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
-    'x-content-type-options': 'nosniff'
+    'x-content-type-options': 'nosniff',
+    ...extraHeaders
   });
   res.end(JSON.stringify(body));
 }
@@ -34,11 +36,19 @@ function constantTimeEqual(left, right) {
   return crypto.timingSafeEqual(a, b);
 }
 
+function bearerToken(req) {
+  const header = String(req.headers.authorization || '');
+  return header.startsWith('Bearer ') ? header.slice(7) : '';
+}
+
 function isAuthorized(req, apiKey) {
   if (!apiKey) return false;
-  const header = String(req.headers.authorization || '');
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  return constantTimeEqual(token, apiKey);
+  return constantTimeEqual(bearerToken(req), apiKey);
+}
+
+function clientKey(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.socket?.remoteAddress || 'anonymous';
 }
 
 function parseWorkflowPath(url) {
@@ -52,11 +62,17 @@ export function createService({
   webhookHandler = null,
   apiKey,
   maxBodyBytes = 1024 * 1024,
-  readinessCheck = async () => ({ ok: true })
+  readinessCheck = async () => ({ ok: true }),
+  rateLimiter = new SlidingWindowRateLimiter(),
+  auditLog = null
 } = {}) {
   if (!orchestrator?.execute || !orchestrator?.resume) throw new Error('orchestrator with execute() and resume() is required');
   if (!stateStore?.load) throw new Error('stateStore with load() is required');
   if (!apiKey) throw new Error('API key is required');
+
+  const audit = async (event) => {
+    try { await auditLog?.append?.(event); } catch { /* audit failure must not expose internals to clients */ }
+  };
 
   return http.createServer(async (req, res) => {
     try {
@@ -84,10 +100,20 @@ export function createService({
           signature: req.headers['x-hub-signature-256'],
           rawBody
         });
+        await audit({ type: 'github_webhook', accepted: Boolean(result.accepted), status: result.status || 202, reason: result.reason || null });
         return json(res, result.status || 202, result);
       }
 
-      if (!isAuthorized(req, apiKey)) return json(res, 401, { error: 'unauthorized' });
+      const rate = rateLimiter.check(clientKey(req));
+      if (!rate.allowed) {
+        await audit({ type: 'rate_limited', path: url.pathname, method: req.method });
+        return json(res, 429, { error: 'rate_limited' }, { 'retry-after': String(Math.ceil(rate.retryAfterMs / 1000)) });
+      }
+
+      if (!isAuthorized(req, apiKey)) {
+        await audit({ type: 'auth_failed', path: url.pathname, method: req.method });
+        return json(res, 401, { error: 'unauthorized' });
+      }
 
       if (req.method === 'POST' && url.pathname === '/api/workflows') {
         const raw = await readBody(req, maxBodyBytes);
@@ -96,6 +122,7 @@ export function createService({
         if (typeof payload?.goal !== 'string' || !payload.goal.trim()) return json(res, 400, { error: 'goal_required' });
         if (payload.goal.length > 10000) return json(res, 413, { error: 'goal_too_large' });
         const run = await orchestrator.execute(payload.goal.trim());
+        await audit({ type: 'workflow_started', workflow_run_id: run.workflow_run_id, workflow_status: run.workflow_status });
         return json(res, 202, run);
       }
 
@@ -112,6 +139,7 @@ export function createService({
       if (workflowPath && req.method === 'POST' && workflowPath.action === 'resume') {
         try {
           const run = await orchestrator.resume(workflowPath.id);
+          await audit({ type: 'workflow_resumed', workflow_run_id: run.workflow_run_id, workflow_status: run.workflow_status });
           return json(res, 202, run);
         } catch (error) {
           const message = String(error?.message || 'resume_failed');
