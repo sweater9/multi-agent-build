@@ -1,10 +1,13 @@
 import fs from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
+import path from 'node:path';
 import { PlannerAgent, BuilderAgent, QaAgent } from './agents.js';
+import { HashChainedAuditLog } from './audit-log.js';
 import { DeliveryGate } from './delivery.js';
 import { GitHubRestClient } from './github-client.js';
 import { Orchestrator } from './orchestrator.js';
 import { HttpJsonProvider } from './providers.js';
+import { SlidingWindowRateLimiter } from './rate-limit.js';
 import { createRepositoryHandlers, DEFAULT_TOOL_ALLOWLIST } from './repository-tools.js';
 import { ToolGateway } from './security.js';
 import { createService } from './service.js';
@@ -17,6 +20,10 @@ function required(name) {
   return value;
 }
 
+function csv(value) {
+  return String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
+}
+
 const apiKey = required('SERVICE_API_KEY');
 if (apiKey.length < 24) throw new Error('SERVICE_API_KEY must be at least 24 characters');
 
@@ -26,7 +33,10 @@ const provider = process.env.AGENT_PROVIDER_URL
   ? new HttpJsonProvider({
       endpoint: process.env.AGENT_PROVIDER_URL,
       apiKey: process.env.AGENT_PROVIDER_API_KEY || null,
-      timeoutMs: Number(process.env.AGENT_PROVIDER_TIMEOUT_MS || 30000)
+      timeoutMs: Number(process.env.AGENT_PROVIDER_TIMEOUT_MS || 30000),
+      maxResponseBytes: Number(process.env.AGENT_PROVIDER_MAX_RESPONSE_BYTES || 1024 * 1024),
+      allowedHosts: csv(process.env.AGENT_PROVIDER_ALLOWED_HOSTS),
+      allowHttp: String(process.env.AGENT_PROVIDER_ALLOW_HTTP || '').toLowerCase() === 'true'
     })
   : null;
 
@@ -72,11 +82,21 @@ const webhookHandler = webhookSecret
   ? new GitHubWorkflowEventHandler({ orchestrator, stateStore, webhookSecret })
   : null;
 
+const auditDirectory = process.env.AUDIT_LOG_DIR || path.join(stateDirectory, 'audit');
+const auditLog = new HashChainedAuditLog({ directory: auditDirectory });
+const rateLimiter = new SlidingWindowRateLimiter({
+  limit: Number(process.env.RATE_LIMIT_REQUESTS || 60),
+  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS || 60_000),
+  maxKeys: Number(process.env.RATE_LIMIT_MAX_CLIENTS || 10_000)
+});
+
 const server = createService({
   orchestrator,
   stateStore,
   webhookHandler,
   apiKey,
+  auditLog,
+  rateLimiter,
   maxBodyBytes: Number(process.env.MAX_REQUEST_BYTES || 1024 * 1024),
   readinessCheck: async () => {
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
@@ -91,7 +111,8 @@ const server = createService({
       durable_state_mount: stateMetadata.durable_mount,
       provider_configured: Boolean(provider),
       repository_automation_configured: Boolean(repositoryTarget),
-      webhook_configured: Boolean(webhookHandler)
+      webhook_configured: Boolean(webhookHandler),
+      rate_limit_requests: Number(process.env.RATE_LIMIT_REQUESTS || 60)
     };
   }
 });
