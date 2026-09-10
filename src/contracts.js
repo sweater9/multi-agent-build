@@ -3,6 +3,7 @@ export const STATES = Object.freeze({
   PLANNING: 'planning',
   BUILDING: 'building',
   QA_REVIEW: 'qa_review',
+  AWAITING_CI: 'awaiting_ci',
   COMPLETED: 'completed',
   BLOCKED: 'blocked',
   FAILED: 'failed'
