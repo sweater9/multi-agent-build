@@ -35,3 +35,12 @@ test('one specialist failure does not fail the entire workflow',async()=>{
   const result=await new DynamicPromptWorkspace({provider}).execute('Analyze resiliently');
   assert.equal(specialistCalls,2);assert.equal(result.status,'completed');assert.equal(result.degraded,true);assert.equal(result.specialist_failures[0].error,'provider_rate_limited');assert.equal(result.output,'final from surviving evidence');
 });
+
+test('research failure degrades to dynamic mode instead of failing the prompt',async()=>{
+  const provider={
+    async research(){throw new Error('HTTP 429')},
+    async generate({agentRole}){if(agentRole==='dynamic_planner')return{objective:'x',approach:'y',specialists:[{name:'A',focus:'A'},{name:'B',focus:'B'}]};if(agentRole==='specialist')return{answer:'view'};if(agentRole==='judge')return{answer:'candidate',confidence:75};if(agentRole==='dynamic_qa')return{approved:true,answer:'final without live research',quality_score:82,findings:[]};throw new Error('unexpected role')}
+  };
+  const result=await new DynamicPromptWorkspace({provider}).execute('Use current info',{research:true});
+  assert.equal(result.status,'completed');assert.equal(result.research_requested,true);assert.equal(result.research_mode,false);assert.equal(result.research_error,'provider_rate_limited');assert.equal(result.degraded,true);assert.equal(result.output,'final without live research');assert.equal(result.agents.researcher.status,'failed');
+});

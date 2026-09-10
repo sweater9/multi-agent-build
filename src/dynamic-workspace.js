@@ -48,7 +48,7 @@ export class DynamicPromptWorkspace {
   async save(run) { if (this.stateStore?.save) await this.stateStore.save(run); }
   async ask(agentRole, input) { return this.provider.generate({ agentRole, input }); }
 
-  async runSpecialists({ specialists, goal, plan, research }) {
+  async runSpecialists({ specialists, goal, plan, research, researchError }) {
     const successes = [];
     const failures = [];
     for (let i = 0; i < specialists.length; i += this.specialistConcurrency) {
@@ -59,6 +59,7 @@ export class DynamicPromptWorkspace {
           specialist,
           plan,
           research,
+          research_status: researchError ? { requested: true, available: false, error: researchError } : { requested: Boolean(research), available: Boolean(research) },
           instruction: `Act only as the ${specialist.name}. ${specialist.focus} Produce a substantive independent answer. Clearly distinguish facts, assumptions, and recommendations. ${research ? 'Ground current factual claims in the supplied research packet and preserve source references.' : 'Do not claim to have browsed or verified external sources.'}`
         });
         return { id: specialist.id, name: specialist.name, focus: specialist.focus, status: 'success', output };
@@ -75,7 +76,7 @@ export class DynamicPromptWorkspace {
   async execute(goal, options = {}) {
     const cleanGoal = String(goal || '').trim();
     if (!cleanGoal) throw new Error('Prompt is required');
-    const researchMode = options?.research === true;
+    const researchRequested = options?.research === true;
     const now = this.clock().toISOString();
     const run = {
       workflow_run_id: crypto.randomUUID(),
@@ -83,7 +84,8 @@ export class DynamicPromptWorkspace {
       state: 'planning',
       project_title: 'dynamic-prompt-workspace',
       goal: cleanGoal,
-      research_mode: researchMode,
+      research_requested: researchRequested,
+      research_mode: false,
       created_at: now,
       updated_at: now,
       agents: []
@@ -92,19 +94,31 @@ export class DynamicPromptWorkspace {
 
     try {
       let research = null;
-      if (researchMode) {
-        if (typeof this.provider.research !== 'function') throw new Error('Research mode is not available with the configured provider');
+      let researchError = null;
+      if (researchRequested) {
         run.state = 'researching';
         run.workflow_status = 'researching';
         await this.save(run);
-        research = await this.provider.research({ goal: cleanGoal });
-        run.research = research;
-        run.agents.push({ id: 'researcher', name: 'Web Researcher', status: 'success', output: research });
+        if (typeof this.provider.research !== 'function') {
+          researchError = 'research_not_available';
+          run.agents.push({ id: 'researcher', name: 'Web Researcher', status: 'failed', error: researchError });
+        } else {
+          try {
+            research = await this.provider.research({ goal: cleanGoal });
+            run.research = research;
+            run.research_mode = true;
+            run.agents.push({ id: 'researcher', name: 'Web Researcher', status: 'success', output: research });
+          } catch (error) {
+            researchError = safeError(error);
+            run.agents.push({ id: 'researcher', name: 'Web Researcher', status: 'failed', error: researchError });
+          }
+        }
       }
 
       const planRaw = await this.ask('dynamic_planner', {
         goal: cleanGoal,
         research,
+        research_status: { requested: researchRequested, available: Boolean(research), error: researchError },
         instruction: 'Return JSON with objective, approach, and specialists. specialists must be an array of 2 to 4 objects with name and focus. Select expertise specifically for this task. Do not perform the task yet.'
       });
       const specialists = cleanSpecialists(planRaw?.specialists);
@@ -118,7 +132,7 @@ export class DynamicPromptWorkspace {
       run.workflow_status = 'specialists';
       await this.save(run);
 
-      const specialistRun = await this.runSpecialists({ specialists, goal: cleanGoal, plan: run.plan, research });
+      const specialistRun = await this.runSpecialists({ specialists, goal: cleanGoal, plan: run.plan, research, researchError });
       run.agents.push(...specialistRun.successes, ...specialistRun.failures);
       if (!specialistRun.successes.length) throw new Error('All specialist agents were temporarily unavailable');
       run.state = 'judging';
@@ -129,9 +143,10 @@ export class DynamicPromptWorkspace {
         goal: cleanGoal,
         plan: run.plan,
         research,
+        research_status: { requested: researchRequested, available: Boolean(research), error: researchError },
         specialist_outputs: specialistRun.successes.map(r => ({ name: r.name, output: r.output })),
         specialist_failures: specialistRun.failures.map(r => ({ name: r.name, error: r.error })),
-        instruction: 'Compare the available independent specialist outputs. Resolve disagreements, reject unsupported claims, retain the strongest reasoning, and produce one complete candidate final answer. If one specialist failed, continue with the successful evidence rather than failing the workflow. If research sources are supplied, preserve useful source references and do not invent any.'
+        instruction: 'Compare the available independent specialist outputs. Resolve disagreements, reject unsupported claims, retain the strongest reasoning, and produce one complete candidate final answer. If one specialist failed, continue with the successful evidence rather than failing the workflow. If research sources are supplied, preserve useful source references and do not invent any. If research was requested but unavailable, do not imply that current web verification occurred.'
       });
       run.agents.push({ id: 'judge', name: 'Judge & Synthesizer', status: 'success', output: judge });
       run.state = 'qa_review';
@@ -143,8 +158,9 @@ export class DynamicPromptWorkspace {
         candidate: judge,
         plan: run.plan,
         research,
+        research_status: { requested: researchRequested, available: Boolean(research), error: researchError },
         specialist_failures: specialistRun.failures,
-        instruction: 'Perform final quality and safety review. Check whether the candidate actually answers the user, is internally consistent, and states important uncertainty. When research is present, remove unsupported current claims rather than inventing citations. A non-critical specialist failure alone is not a reason to block an otherwise sound answer.'
+        instruction: 'Perform final quality and safety review. Check whether the candidate actually answers the user, is internally consistent, and states important uncertainty. When research is present, remove unsupported current claims rather than inventing citations. If research was requested but unavailable, the answer must not imply live verification and should note that limitation when current information is material. A non-critical specialist failure alone is not a reason to block an otherwise sound answer.'
       });
       const approved = qa?.approved !== false;
       run.agents.push({ id: 'qa', name: 'QA & Security', status: approved ? 'success' : 'blocked', output: qa });
@@ -168,9 +184,11 @@ export class DynamicPromptWorkspace {
         summary: run.final_synthesized_result.summary,
         confidence: run.final_synthesized_result.confidence,
         quality_score: run.final_synthesized_result.quality_score,
-        research_mode: researchMode,
+        research_requested: researchRequested,
+        research_mode: Boolean(research),
+        research_error: researchError,
         sources: research?.sources || [],
-        degraded: specialistRun.failures.length > 0,
+        degraded: specialistRun.failures.length > 0 || Boolean(researchError),
         specialist_failures: specialistRun.failures.map(({ name, error }) => ({ name, error })),
         agent_team: specialists.map(s => ({ name: s.name, focus: s.focus })),
         agents: Object.fromEntries(run.agents.map(a => [a.id, { name: a.name, status: a.status, output: a.output, error: a.error }]))
