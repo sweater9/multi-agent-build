@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { STATES, assertNonEmptyString } from './contracts.js';
+import { STATES, assertNonEmptyString, validatePlan, validateBuild, validateQa } from './contracts.js';
 import { redactSecrets } from './security.js';
 
 const ALLOWED_TRANSITIONS = Object.freeze({
@@ -47,15 +47,15 @@ export class Orchestrator {
 
     try {
       this.transition(run, STATES.PLANNING);
-      const plan = await this.planner.run({ goal });
+      const plan = validatePlan(await this.planner.run({ goal }));
       run.agents.push(plan);
 
       this.transition(run, STATES.BUILDING);
-      const build = await this.builder.run({ goal, plan });
+      const build = validateBuild(await this.builder.run({ goal, plan }));
       run.agents.push(build);
 
       this.transition(run, STATES.QA_REVIEW);
-      const qa = await this.qa.run({ goal, plan, build });
+      const qa = validateQa(await this.qa.run({ goal, plan, build }));
       run.agents.push(qa);
 
       if (!qa.approved) {
