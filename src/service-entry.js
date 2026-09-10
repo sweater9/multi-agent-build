@@ -8,7 +8,7 @@ import { HttpJsonProvider } from './providers.js';
 import { createRepositoryHandlers, DEFAULT_TOOL_ALLOWLIST } from './repository-tools.js';
 import { ToolGateway } from './security.js';
 import { createService } from './service.js';
-import { JsonFileStateStore } from './state-store.js';
+import { createStateStoreFromEnvironment } from './state-store-factory.js';
 import { GitHubWorkflowEventHandler } from './webhook.js';
 
 function required(name) {
@@ -20,8 +20,8 @@ function required(name) {
 const apiKey = required('SERVICE_API_KEY');
 if (apiKey.length < 24) throw new Error('SERVICE_API_KEY must be at least 24 characters');
 
-const stateDirectory = process.env.WORKFLOW_STATE_DIR || '.multi-agent-runs';
-const stateStore = new JsonFileStateStore({ directory: stateDirectory });
+const { store: stateStore, metadata: stateMetadata } = createStateStoreFromEnvironment(process.env);
+const stateDirectory = stateMetadata.directory;
 const provider = process.env.AGENT_PROVIDER_URL
   ? new HttpJsonProvider({
       endpoint: process.env.AGENT_PROVIDER_URL,
@@ -81,8 +81,14 @@ const server = createService({
   readinessCheck: async () => {
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
     await fs.access(stateDirectory, fsConstants.R_OK | fsConstants.W_OK);
+    const probe = `${stateDirectory}/.readiness-probe-${process.pid}`;
+    await fs.writeFile(probe, 'ok\n', { mode: 0o600 });
+    await fs.unlink(probe);
     return {
       ok: true,
+      state_backend: stateMetadata.backend,
+      durable_state_required: stateMetadata.durability_required,
+      durable_state_mount: stateMetadata.durable_mount,
       provider_configured: Boolean(provider),
       repository_automation_configured: Boolean(repositoryTarget),
       webhook_configured: Boolean(webhookHandler)
