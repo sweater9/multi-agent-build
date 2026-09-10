@@ -1,6 +1,6 @@
 # Multi-Agent Build
 
-A runnable, dependency-light reference implementation of a secure multi-agent software delivery workflow.
+A runnable, dependency-light implementation of a secure multi-agent software delivery workflow.
 
 ## Workflow
 
@@ -13,8 +13,7 @@ The runtime uses narrowly scoped agents controlled by a central orchestrator:
 - **QA & Security Auditor** — independently validates the build and repository diff and can block release.
 - **Delivery Gate** — opens the pull request only after QA approval, checks CI, and never performs the final merge.
 - **GitHub Workflow Event Handler** — accepts signed `workflow_run` completion events and resumes matching saved workflows.
-
-The architecture and security specification is stored in [`architecture-security-review.json`](./architecture-security-review.json).
+- **Hosted Service** — exposes authenticated workflow APIs, health/readiness endpoints, and the signed GitHub webhook on one HTTP listener.
 
 ## Run locally
 
@@ -26,56 +25,77 @@ npm test
 npm start -- "Build a secure cloud service"
 ```
 
+Hosted service:
+
+```bash
+SERVICE_API_KEY="replace-with-a-long-random-secret" npm run service
+```
+
+## Hosted API
+
+Public operational endpoints:
+
+- `GET /health` — process liveness
+- `GET /ready` — state-directory/configuration readiness
+
+Bearer-authenticated workflow endpoints:
+
+- `POST /api/workflows` with `{ "goal": "..." }`
+- `GET /api/workflows/:workflowRunId`
+- `POST /api/workflows/:workflowRunId/resume`
+
+GitHub webhook endpoint:
+
+- `POST /webhooks/github` — independently authenticated with `X-Hub-Signature-256`
+
+The API compares bearer secrets in constant time after hashing. Request bodies are bounded, API responses disable caching, and error responses do not expose internal stack traces.
+
+## Repository automation
+
+Repository automation is optional and configured only through environment variables. When enabled, the service creates a `GitHubRestClient`, routes all repository operations through `ToolGateway`, restricts writes to the configured feature branch, and preserves the human-only final merge boundary.
+
+Required variables for repository automation:
+
+- `GITHUB_TOKEN`
+- `TARGET_REPOSITORY` (for example `owner/repo`)
+- `TARGET_BRANCH` (defaults to `feature/agent-build`)
+- `TARGET_BASE` (defaults to `main`)
+
+Optional model-provider variables:
+
+- `AGENT_PROVIDER_URL`
+- `AGENT_PROVIDER_API_KEY`
+- `AGENT_PROVIDER_TIMEOUT_MS`
+
+Webhook resume requires `GITHUB_WEBHOOK_SECRET`.
+
 ## Implemented controls
 
-- Explicit workflow state machine
-- Planner -> Builder -> QA orchestration
-- Bounded Builder -> QA/CI repair loop
+- Explicit workflow state machine and bounded Builder -> QA/CI repair loop
 - Runtime validation of agent handoffs
-- Persistent workflow state with atomic writes
-- Resumable `awaiting_ci` checkpoints
+- Persistent/resumable `awaiting_ci` checkpoints
 - Vendor-neutral model provider adapters
 - Controlled repository branch, file, diff, PR, and CI-status operations
 - No direct writes to `main` or `master` through repository handlers
-- Pull request creation only after QA approval and a reviewable diff
-- CI must reach a verifiable terminal success state before `ready_for_merge: true`
+- CI must reach terminal success before `ready_for_merge: true`
 - Failed CI checks feed back into Builder for bounded repair
-- Final merge remains an explicit human approval action
+- Final merge remains explicit human approval
 - Signed GitHub webhook verification using HMAC-SHA256
-- Durable delivery-ID claims to reject duplicate webhook delivery after process restarts
-- Repository + branch matching so unrelated workflow events cannot resume a saved run
-- Bounded webhook body size via the HTTP server factory
-- Health endpoint for hosted webhook services
+- Durable delivery-ID replay protection
+- Repository + branch matching for event-driven resume
+- Bearer authentication for workflow APIs
+- Public liveness and readiness endpoints
+- Bounded HTTP request bodies and no-store API responses
 - Basic secret redaction for logs/errors
 - GitHub Actions CI with syntax checks, tests, and dependency audit
 
-## Event-driven CI resume
+## Render deployment
 
-When a workflow reaches `awaiting_ci`, its delivery target is persisted:
+`render.yaml` provides a Frankfurt Node web-service blueprint using `npm run service` and `/health` as the service health check.
 
-```json
-{
-  "delivery": {
-    "target": {
-      "repository": "owner/repo",
-      "base": "main",
-      "branch": "feature/agent-build"
-    }
-  }
-}
-```
+Secrets are intentionally not committed. Set at least `SERVICE_API_KEY` in Render. Configure `GITHUB_TOKEN`, `TARGET_REPOSITORY`, and `GITHUB_WEBHOOK_SECRET` only when repository automation and event-driven resume are required.
 
-A GitHub `workflow_run` webhook can then resume the matching saved workflow when GitHub reports the run as `completed`. The handler verifies `X-Hub-Signature-256` against a server-side webhook secret, requires a unique `X-GitHub-Delivery` ID, matches the event's repository and head branch to a persisted `awaiting_ci` run, and calls `orchestrator.resume(workflowRunId)`.
-
-Duplicate delivery IDs are claimed atomically and ignored on replay. Events for other repositories, other branches, other event types, or non-completed workflow runs do not resume anything.
-
-`src/webhook-server.js` provides a minimal Node HTTP server factory with `POST /webhooks/github` and `GET /health`. Deployment code must inject the configured orchestrator, state store, and webhook secret; the repository contains no embedded credentials.
-
-## Resumable execution
-
-Each workflow stores its original goal, agent outputs, delivery state, repair count, and audit trail. When CI is still running, execution ends safely with `workflow_status: "awaiting_ci"`. A later resume reuses the recorded pull request and existing Planner/Builder/QA outputs instead of restarting the workflow.
-
-If CI succeeds, the workflow moves directly to `completed` with `ready_for_merge: true`. If CI fails, the failure becomes structured `CI Delivery Gate` feedback for the next bounded Builder repair attempt. Terminal and non-`awaiting_ci` runs cannot be resumed.
+The included free-plan blueprint stores workflow state under `/tmp/multi-agent-runs`. **That filesystem is ephemeral.** It is suitable for deployment/smoke testing, but long-lived production runs require a persistent Render disk or an external durable state store before the service should be considered production-durable.
 
 ## Security model
 
@@ -85,6 +105,6 @@ Production credentials and webhook secrets must be supplied externally. The runt
 
 ## Current status
 
-**v0.6.0: event-driven, signed, replay-protected CI resume with persistent target matching and explicit human merge approval.**
+**v0.7.0: authenticated hosted service layer with GitHub REST integration, health/readiness checks, signed event-driven CI resume, and Render deployment configuration.**
 
-Further production hardening should add hosted API authentication/authorization, immutable centralized audit storage, a managed secret store, request/rate/token budgets, richer prompt-injection defenses, sandboxed build execution, detailed CI log ingestion, and deployment approval policies.
+Further production hardening should move workflow state to durable managed storage, add per-user authorization/rate limits, immutable centralized audit storage, a managed secret store, stronger prompt-injection defenses, sandboxed build execution, and detailed CI log ingestion.
