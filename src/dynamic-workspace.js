@@ -36,30 +36,40 @@ export class DynamicPromptWorkspace {
   async save(run) { if (this.stateStore?.save) await this.stateStore.save(run); }
   async ask(agentRole, input) { return this.provider.generate({ agentRole, input }); }
 
-  async execute(goal) {
+  async execute(goal, options = {}) {
     const cleanGoal = String(goal || '').trim();
     if (!cleanGoal) throw new Error('Prompt is required');
+    const researchMode = options?.research === true;
     const now = this.clock().toISOString();
-    const run = { workflow_run_id: crypto.randomUUID(), workflow_status: 'planning', state: 'planning', project_title: 'dynamic-prompt-workspace', goal: cleanGoal, created_at: now, updated_at: now, agents: [] };
+    const run = { workflow_run_id: crypto.randomUUID(), workflow_status: 'planning', state: 'planning', project_title: 'dynamic-prompt-workspace', goal: cleanGoal, research_mode: researchMode, created_at: now, updated_at: now, agents: [] };
     await this.save(run);
     try {
-      const planRaw = await this.ask('dynamic_planner', { goal: cleanGoal, instruction: 'Return JSON with objective, approach, and specialists. specialists must be an array of 2 to 4 objects with name and focus. Select expertise specifically for this task. Do not perform the task yet.' });
+      let research = null;
+      if (researchMode) {
+        if (typeof this.provider.research !== 'function') throw new Error('Research mode is not available with the configured provider');
+        run.state = 'researching'; run.workflow_status = 'researching'; await this.save(run);
+        research = await this.provider.research({ goal: cleanGoal });
+        run.research = research;
+        run.agents.push({ id: 'researcher', name: 'Web Researcher', status: 'success', output: research });
+      }
+
+      const planRaw = await this.ask('dynamic_planner', { goal: cleanGoal, research, instruction: 'Return JSON with objective, approach, and specialists. specialists must be an array of 2 to 4 objects with name and focus. Select expertise specifically for this task. Do not perform the task yet.' });
       const specialists = cleanSpecialists(planRaw?.specialists);
       run.plan = { objective: String(planRaw?.objective || cleanGoal), approach: String(planRaw?.approach || 'Use independent specialist analysis, adjudication, and QA.'), specialists };
       run.agents.push({ id: 'planner', name: 'Planner', status: 'success', output: run.plan });
       run.state = 'specialists'; run.workflow_status = 'specialists'; await this.save(run);
 
       const results = await Promise.all(specialists.map(async specialist => {
-        const output = await this.ask('specialist', { goal: cleanGoal, specialist, plan: run.plan, instruction: `Act only as the ${specialist.name}. ${specialist.focus} Produce a substantive independent answer. Clearly distinguish facts, assumptions, and recommendations. Do not claim to have browsed or verified external sources unless source material was supplied.` });
+        const output = await this.ask('specialist', { goal: cleanGoal, specialist, plan: run.plan, research, instruction: `Act only as the ${specialist.name}. ${specialist.focus} Produce a substantive independent answer. Clearly distinguish facts, assumptions, and recommendations. ${research ? 'Ground current factual claims in the supplied research packet and preserve source references.' : 'Do not claim to have browsed or verified external sources.'}` });
         return { id: specialist.id, name: specialist.name, focus: specialist.focus, status: 'success', output };
       }));
       run.agents.push(...results); run.state = 'judging'; run.workflow_status = 'judging'; await this.save(run);
 
-      const judge = await this.ask('judge', { goal: cleanGoal, plan: run.plan, specialist_outputs: results.map(r => ({ name: r.name, output: r.output })), instruction: 'Compare the independent specialist outputs. Resolve disagreements, reject unsupported claims, retain the strongest reasoning, and produce one complete candidate final answer. Return JSON with answer, agreements, disagreements, confidence (0-100), and limitations.' });
+      const judge = await this.ask('judge', { goal: cleanGoal, plan: run.plan, research, specialist_outputs: results.map(r => ({ name: r.name, output: r.output })), instruction: 'Compare the independent specialist outputs. Resolve disagreements, reject unsupported claims, retain the strongest reasoning, and produce one complete candidate final answer. If research sources are supplied, preserve useful source references and do not invent any.' });
       run.agents.push({ id: 'judge', name: 'Judge & Synthesizer', status: 'success', output: judge });
       run.state = 'qa_review'; run.workflow_status = 'qa_review'; await this.save(run);
 
-      const qa = await this.ask('dynamic_qa', { goal: cleanGoal, candidate: judge, plan: run.plan, instruction: 'Perform final quality and safety review. Check whether the candidate actually answers the user, is internally consistent, avoids fabricated sourcing, and states important uncertainty. Return JSON with approved boolean, answer (a corrected final answer), findings array, and quality_score 0-100.' });
+      const qa = await this.ask('dynamic_qa', { goal: cleanGoal, candidate: judge, plan: run.plan, research, instruction: 'Perform final quality and safety review. Check whether the candidate actually answers the user, is internally consistent, and states important uncertainty. When research is present, remove unsupported current claims rather than inventing citations.' });
       const approved = qa?.approved !== false;
       run.agents.push({ id: 'qa', name: 'QA & Security', status: approved ? 'success' : 'blocked', output: qa });
       run.state = approved ? 'completed' : 'blocked'; run.workflow_status = run.state;
@@ -73,6 +83,8 @@ export class DynamicPromptWorkspace {
         summary: run.final_synthesized_result.summary,
         confidence: run.final_synthesized_result.confidence,
         quality_score: run.final_synthesized_result.quality_score,
+        research_mode: researchMode,
+        sources: research?.sources || [],
         agent_team: specialists.map(s => ({ name: s.name, focus: s.focus })),
         agents: Object.fromEntries(run.agents.map(a => [a.id, { name: a.name, status: a.status, output: a.output }]))
       };
