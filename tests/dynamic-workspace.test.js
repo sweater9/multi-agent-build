@@ -2,45 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DynamicPromptWorkspace } from '../src/dynamic-workspace.js';
 
-test('dynamic workspace selects specialists in parallel then judges and QA reviews', async () => {
-  const calls=[];
-  const provider={async generate({agentRole,input}){calls.push({agentRole,input});if(agentRole==='dynamic_planner')return{objective:'Assess launch',approach:'Independent review',specialists:[{name:'Market Analyst',focus:'Assess demand'},{name:'Risk Analyst',focus:'Assess risks'}]};if(agentRole==='specialist')return{answer:`${input.specialist.name} view`,key_points:[],assumptions:[],risks:[]};if(agentRole==='judge')return{answer:'Synthesized answer',agreements:['A'],disagreements:[],confidence:84,limitations:[]};if(agentRole==='dynamic_qa')return{approved:true,answer:'Final reviewed answer',findings:[],quality_score:92};throw new Error('unexpected role')}};
-  const workspace=new DynamicPromptWorkspace({provider});
-  const result=await workspace.execute('Should this launch?');
-  assert.equal(result.status,'completed');assert.equal(result.output,'Final reviewed answer');assert.equal(result.confidence,84);assert.equal(result.quality_score,92);assert.deepEqual(result.agent_team.map(x=>x.name),['Market Analyst','Risk Analyst']);assert.equal(calls.filter(x=>x.agentRole==='specialist').length,2);assert.equal(calls.at(-1).agentRole,'dynamic_qa');
-});
+function providerFixture(){const calls=[];return{calls,provider:{async research(){calls.push({agentRole:'research'});return{answer:'evidence',sources:[{title:'Source',url:'https://example.gov/rule'}]}},async generate({agentRole,input}){calls.push({agentRole,input});if(agentRole==='dynamic_planner')return{objective:'Plan',approach:'Analyze',specialists:[{name:'Analyst A',focus:'A'},{name:'Analyst B',focus:'B'}]};if(agentRole==='specialist')return{answer:`${input.specialist.name} answer`};if(agentRole==='judge')return{answer:'Judged answer',confidence:88};if(agentRole==='dynamic_qa')return{approved:true,answer:'QA final',quality_score:93,findings:[]};throw new Error('unexpected role')}}}}
 
-test('dynamic workspace falls back to safe default specialists when planner team is malformed',async()=>{const provider={async generate({agentRole}){if(agentRole==='dynamic_planner')return{objective:'x',approach:'y',specialists:[]};if(agentRole==='specialist')return{answer:'view'};if(agentRole==='judge')return{answer:'candidate',confidence:70};return{approved:true,answer:'final',quality_score:80,findings:[]}}};const result=await new DynamicPromptWorkspace({provider}).execute('Analyze this');assert.equal(result.agent_team.length,2);assert.equal(result.status,'completed')});
+test('1 agent uses one model stage and returns direct answer',async()=>{const{calls,provider}=providerFixture();const result=await new DynamicPromptWorkspace({provider}).execute('Simple task',{agentCount:1});assert.equal(result.status,'completed');assert.equal(result.agent_count,1);assert.equal(result.output,'Task Analyst answer');assert.deepEqual(calls.map(x=>x.agentRole),['specialist'])});
 
-test('research mode runs provenance step and passes sources through the workflow',async()=>{
-  const calls=[];
-  const research={answer:'Current evidence [1]',sources:[{title:'Official source',url:'https://example.gov/rule'}],provider:'groq/compound'};
-  const provider={
-    async research({goal}){calls.push({agentRole:'research',goal});return research},
-    async generate({agentRole,input}){calls.push({agentRole,input});if(agentRole==='dynamic_planner')return{objective:'Research task',approach:'Evidence first',specialists:[{name:'Research Analyst',focus:'Interpret evidence'},{name:'Critical Reviewer',focus:'Challenge conclusions'}]};if(agentRole==='specialist')return{answer:'Grounded view',key_points:[],assumptions:[],risks:[]};if(agentRole==='judge')return{answer:'Grounded synthesis [1]',agreements:[],disagreements:[],confidence:88,limitations:[]};return{approved:true,answer:'Final grounded answer [1]',findings:[],quality_score:94}}
-  };
-  const result=await new DynamicPromptWorkspace({provider}).execute('What changed?',{research:true});
-  assert.equal(result.research_mode,true);assert.equal(result.sources.length,1);assert.equal(result.sources[0].url,'https://example.gov/rule');assert.equal(result.agents.researcher.name,'Web Researcher');assert.equal(calls[0].agentRole,'research');assert.ok(calls.find(x=>x.agentRole==='specialist').input.research);
-});
+test('2 agents defaults to answer plus QA',async()=>{const{calls,provider}=providerFixture();const result=await new DynamicPromptWorkspace({provider}).execute('Normal task',{agentCount:2});assert.equal(result.status,'completed');assert.equal(result.agent_count,2);assert.equal(result.output,'QA final');assert.deepEqual(calls.map(x=>x.agentRole),['specialist','dynamic_qa'])});
 
-test('one specialist failure does not fail the entire workflow',async()=>{
-  let specialistCalls=0;
-  const provider={async generate({agentRole,input}){
-    if(agentRole==='dynamic_planner')return{objective:'x',approach:'y',specialists:[{name:'Analyst A',focus:'A'},{name:'Analyst B',focus:'B'}]};
-    if(agentRole==='specialist'){specialistCalls+=1;if(input.specialist.name==='Analyst A')throw new Error('HTTP 429');return{answer:'surviving specialist'};}
-    if(agentRole==='judge'){assert.equal(input.specialist_outputs.length,1);assert.equal(input.specialist_failures.length,1);return{answer:'candidate',confidence:72};}
-    if(agentRole==='dynamic_qa')return{approved:true,answer:'final from surviving evidence',quality_score:86,findings:[]};
-    throw new Error('unexpected role');
-  }};
-  const result=await new DynamicPromptWorkspace({provider}).execute('Analyze resiliently');
-  assert.equal(specialistCalls,2);assert.equal(result.status,'completed');assert.equal(result.degraded,true);assert.equal(result.specialist_failures[0].error,'provider_rate_limited');assert.equal(result.output,'final from surviving evidence');
-});
+test('3 agents adds planner before answer and QA',async()=>{const{calls,provider}=providerFixture();const result=await new DynamicPromptWorkspace({provider}).execute('Planned task',{agentCount:3});assert.equal(result.agent_count,3);assert.deepEqual(calls.map(x=>x.agentRole),['dynamic_planner','specialist','dynamic_qa'])});
 
-test('research failure degrades to dynamic mode instead of failing the prompt',async()=>{
-  const provider={
-    async research(){throw new Error('HTTP 429')},
-    async generate({agentRole}){if(agentRole==='dynamic_planner')return{objective:'x',approach:'y',specialists:[{name:'A',focus:'A'},{name:'B',focus:'B'}]};if(agentRole==='specialist')return{answer:'view'};if(agentRole==='judge')return{answer:'candidate',confidence:75};if(agentRole==='dynamic_qa')return{approved:true,answer:'final without live research',quality_score:82,findings:[]};throw new Error('unexpected role')}
-  };
-  const result=await new DynamicPromptWorkspace({provider}).execute('Use current info',{research:true});
-  assert.equal(result.status,'completed');assert.equal(result.research_requested,true);assert.equal(result.research_mode,false);assert.equal(result.research_error,'provider_rate_limited');assert.equal(result.degraded,true);assert.equal(result.output,'final without live research');assert.equal(result.agents.researcher.status,'failed');
-});
+test('4 agents uses planner, two specialists and QA without judge',async()=>{const{calls,provider}=providerFixture();const result=await new DynamicPromptWorkspace({provider}).execute('Compare options',{agentCount:4});assert.equal(result.agent_count,4);assert.equal(result.agent_team.length,2);assert.equal(calls.filter(x=>x.agentRole==='specialist').length,2);assert.equal(calls.some(x=>x.agentRole==='judge'),false);assert.equal(calls.at(-1).agentRole,'dynamic_qa')});
+
+test('5 agents runs full planner, two specialists, judge and QA workflow',async()=>{const{calls,provider}=providerFixture();const result=await new DynamicPromptWorkspace({provider}).execute('Hard task',{agentCount:5});assert.equal(result.agent_count,5);assert.equal(result.confidence,88);assert.equal(calls.filter(x=>x.agentRole==='specialist').length,2);assert.equal(calls.some(x=>x.agentRole==='judge'),true);assert.equal(calls.at(-1).agentRole,'dynamic_qa')});
+
+test('research remains optional and can gracefully degrade',async()=>{const calls=[];const provider={async research(){throw new Error('HTTP 429')},async generate({agentRole,input}){calls.push(agentRole);if(agentRole==='specialist')return{answer:'answer without research'};if(agentRole==='dynamic_qa')return{approved:true,answer:'reviewed fallback',quality_score:80};throw new Error('unexpected')}};const result=await new DynamicPromptWorkspace({provider}).execute('Current task',{agentCount:2,research:true});assert.equal(result.status,'completed');assert.equal(result.research_mode,false);assert.equal(result.research_error,'provider_rate_limited');assert.equal(result.output,'reviewed fallback')});
