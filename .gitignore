@@ -1,0 +1,5 @@
+.multi-agent-runs/
+.env
+.env.*
+node_modules/
+*.log

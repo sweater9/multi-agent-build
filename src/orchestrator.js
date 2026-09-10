@@ -13,10 +13,11 @@ const ALLOWED_TRANSITIONS = Object.freeze({
 });
 
 export class Orchestrator {
-  constructor({ planner, builder, qa, clock = () => new Date() }) {
+  constructor({ planner, builder, qa, stateStore = null, clock = () => new Date() }) {
     this.planner = planner;
     this.builder = builder;
     this.qa = qa;
+    this.stateStore = stateStore;
     this.clock = clock;
   }
 
@@ -28,6 +29,10 @@ export class Orchestrator {
     run.state = nextState;
     run.updated_at = this.clock().toISOString();
     run.audit_events.push({ at: run.updated_at, state: nextState, detail });
+  }
+
+  async persist(run) {
+    if (this.stateStore) await this.stateStore.save(run);
   }
 
   async execute(goal) {
@@ -44,19 +49,26 @@ export class Orchestrator {
       audit_events: [{ at: now, state: STATES.RECEIVED, detail: 'request accepted' }],
       final_synthesized_result: null
     };
+    await this.persist(run);
 
     try {
       this.transition(run, STATES.PLANNING);
+      await this.persist(run);
       const plan = validatePlan(await this.planner.run({ goal }));
       run.agents.push(plan);
+      await this.persist(run);
 
       this.transition(run, STATES.BUILDING);
+      await this.persist(run);
       const build = validateBuild(await this.builder.run({ goal, plan }));
       run.agents.push(build);
+      await this.persist(run);
 
       this.transition(run, STATES.QA_REVIEW);
+      await this.persist(run);
       const qa = validateQa(await this.qa.run({ goal, plan, build }));
       run.agents.push(qa);
+      await this.persist(run);
 
       if (!qa.approved) {
         this.transition(run, STATES.BLOCKED, 'QA/security release gate blocked completion');
@@ -66,6 +78,7 @@ export class Orchestrator {
           summary: 'Build blocked by QA/security gate.',
           findings: qa.findings
         };
+        await this.persist(run);
         return run;
       }
 
@@ -79,6 +92,7 @@ export class Orchestrator {
         security_findings: qa.findings,
         acceptance_criteria: plan.acceptance_criteria
       };
+      await this.persist(run);
       return run;
     } catch (error) {
       if ((ALLOWED_TRANSITIONS[run.state] || []).includes(STATES.FAILED)) {
@@ -90,6 +104,7 @@ export class Orchestrator {
         summary: 'Workflow failed safely.',
         error: redactSecrets(error.message)
       };
+      await this.persist(run);
       return run;
     }
   }
