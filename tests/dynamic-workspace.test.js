@@ -22,3 +22,16 @@ test('research mode runs provenance step and passes sources through the workflow
   const result=await new DynamicPromptWorkspace({provider}).execute('What changed?',{research:true});
   assert.equal(result.research_mode,true);assert.equal(result.sources.length,1);assert.equal(result.sources[0].url,'https://example.gov/rule');assert.equal(result.agents.researcher.name,'Web Researcher');assert.equal(calls[0].agentRole,'research');assert.ok(calls.find(x=>x.agentRole==='specialist').input.research);
 });
+
+test('one specialist failure does not fail the entire workflow',async()=>{
+  let specialistCalls=0;
+  const provider={async generate({agentRole,input}){
+    if(agentRole==='dynamic_planner')return{objective:'x',approach:'y',specialists:[{name:'Analyst A',focus:'A'},{name:'Analyst B',focus:'B'}]};
+    if(agentRole==='specialist'){specialistCalls+=1;if(input.specialist.name==='Analyst A')throw new Error('HTTP 429');return{answer:'surviving specialist'};}
+    if(agentRole==='judge'){assert.equal(input.specialist_outputs.length,1);assert.equal(input.specialist_failures.length,1);return{answer:'candidate',confidence:72};}
+    if(agentRole==='dynamic_qa')return{approved:true,answer:'final from surviving evidence',quality_score:86,findings:[]};
+    throw new Error('unexpected role');
+  }};
+  const result=await new DynamicPromptWorkspace({provider}).execute('Analyze resiliently');
+  assert.equal(specialistCalls,2);assert.equal(result.status,'completed');assert.equal(result.degraded,true);assert.equal(result.specialist_failures[0].error,'provider_rate_limited');assert.equal(result.output,'final from surviving evidence');
+});
