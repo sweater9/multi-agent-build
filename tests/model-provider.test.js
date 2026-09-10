@@ -7,11 +7,10 @@ test('environment selects configured providers in stable fallback order', () => 
     GROQ_API_KEY: 'g',
     NVIDIA_NIM_API_KEY: 'n',
     ALIBABA_API_KEY: 'a',
-    GEMINI_API_KEY: 'gm',
-    APINEX_API_KEY: 'apx'
+    GEMINI_API_KEY: 'gm'
   });
   assert.ok(provider);
-  assert.deepEqual(provider.names(), ['groq','nvidia-nim','alibaba','gemini','apinex']);
+  assert.deepEqual(provider.names(), ['groq','nvidia-nim','alibaba','gemini']);
 });
 
 test('environment accepts provider key aliases', () => {
@@ -21,20 +20,18 @@ test('environment accepts provider key aliases', () => {
 });
 
 test('provider defaults use verified OpenAI-compatible endpoints', () => {
-  const provider = createModelProviderFromEnvironment({ ALIBABA_API_KEY: 'a', GEMINI_API_KEY: 'g', APINEX_API_KEY: 'p' });
-  const [alibaba,gemini,apinex]=provider.providers;
+  const provider = createModelProviderFromEnvironment({ ALIBABA_API_KEY: 'a', GEMINI_API_KEY: 'g' });
+  const [alibaba,gemini]=provider.providers;
   assert.equal(alibaba.endpoint,'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions');
   assert.equal(gemini.endpoint,'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
-  assert.equal(apinex.endpoint,'https://api.apinex.bond/v1/chat/completions');
 });
 
 test('provider-specific model overrides are honored', () => {
   const provider=createModelProviderFromEnvironment({
     ALIBABA_API_KEY:'a',ALIBABA_MODEL:'qwen-custom',
-    GEMINI_API_KEY:'g',GEMINI_MODEL:'gemini-custom',
-    APINEX_API_KEY:'p',APINEX_MODEL:'model/custom'
+    GEMINI_API_KEY:'g',GEMINI_MODEL:'gemini-custom'
   });
-  assert.deepEqual(provider.providers.map(x=>x.model),['qwen-custom','gemini-custom','model/custom']);
+  assert.deepEqual(provider.providers.map(x=>x.model),['qwen-custom','gemini-custom']);
 });
 
 test('multi-provider falls back after primary failure', async () => {
@@ -60,15 +57,19 @@ test('explicit provider selection disables fallback', async () => {
   assert.deepEqual(calls,['nvidia']);
 });
 
-test('aliases select new providers explicitly',()=>{
+test('aliases select Alibaba and Gemini explicitly',()=>{
   const provider=new MultiProvider({providers:[
     {name:'alibaba',async generate(){return{}}},
-    {name:'gemini',async generate(){return{}}},
-    {name:'apinex',async generate(){return{}}}
+    {name:'gemini',async generate(){return{}}}
   ]});
   assert.equal(provider.select('dashscope').name,'alibaba');
   assert.equal(provider.select('google').name,'gemini');
-  assert.equal(provider.select('apinex.bond').name,'apinex');
+});
+
+test('APInex is no longer a configured or selectable provider',()=>{
+  const provider=createModelProviderFromEnvironment({GROQ_API_KEY:'g',APINEX_API_KEY:'ignored'});
+  assert.deepEqual(provider.names(),['groq']);
+  assert.throws(()=>provider.select('apinex'),/not configured/);
 });
 
 test('auto selection preserves fallback router',()=>{
