@@ -1,25 +1,333 @@
 {
   "workflow_status": "completed",
   "project_title": "multi-agent-build",
+  "document_version": "1.0.0",
+  "purpose": "Reference architecture and security review for a production-oriented multi-agent build workflow that plans, builds, validates, and synthesizes software delivery outputs.",
+  "architecture": {
+    "pattern": "orchestrated multi-agent pipeline",
+    "execution_flow": [
+      "request_intake",
+      "planning",
+      "implementation",
+      "qa_and_security_review",
+      "final_synthesis"
+    ],
+    "core_principles": [
+      "least privilege",
+      "explicit agent responsibilities",
+      "structured handoffs",
+      "deterministic validation gates",
+      "auditable outputs",
+      "fail-closed behavior for critical checks",
+      "human review before privileged production actions"
+    ],
+    "components": {
+      "orchestrator": {
+        "responsibility": "Accepts the user request, creates a workflow run, invokes agents in the required order, enforces validation gates, and assembles the final response.",
+        "requirements": [
+          "Generate a unique workflow_run_id for every execution",
+          "Persist state transitions and agent outputs",
+          "Reject invalid or incomplete agent responses",
+          "Prevent downstream agents from receiving secrets they do not need",
+          "Stop execution when a blocking security or QA finding is raised"
+        ]
+      },
+      "state_store": {
+        "responsibility": "Stores workflow metadata, task state, agent outputs, validation results, and audit events.",
+        "recommended_data": [
+          "workflow_run_id",
+          "created_at",
+          "updated_at",
+          "request_summary",
+          "agent_status",
+          "artifacts",
+          "qa_findings",
+          "security_findings",
+          "final_status"
+        ],
+        "security_controls": [
+          "encrypt data at rest",
+          "encrypt data in transit",
+          "apply retention limits",
+          "separate secrets from normal workflow state",
+          "use append-only audit logging where practical"
+        ]
+      },
+      "artifact_store": {
+        "responsibility": "Stores generated source code, configuration, build artifacts, reports, and structured outputs.",
+        "security_controls": [
+          "content-type validation",
+          "malware scanning for uploaded artifacts where applicable",
+          "size limits",
+          "signed or scoped access",
+          "integrity hashes for release artifacts"
+        ]
+      },
+      "tool_gateway": {
+        "responsibility": "Provides controlled access to external tools such as GitHub, CI systems, cloud platforms, databases, and package registries.",
+        "security_controls": [
+          "allowlisted tool actions",
+          "scoped credentials",
+          "environment separation",
+          "request logging",
+          "rate limits",
+          "approval gates for destructive actions"
+        ]
+      }
+    }
+  },
   "agents": [
     {
       "agent_id": "planner_01",
       "agent_role": "System Planner",
       "status": "success",
-      "output": "Detailed high-level architecture design"
+      "input_contract": {
+        "required": [
+          "user_goal",
+          "constraints",
+          "available_tools"
+        ]
+      },
+      "output": {
+        "mission": "Translate the request into an executable software delivery plan without making privileged changes.",
+        "responsibilities": [
+          "Clarify the target outcome from available context",
+          "Break work into ordered implementation tasks",
+          "Identify dependencies and assumptions",
+          "Define acceptance criteria",
+          "Classify risky operations that require stronger controls",
+          "Define the evidence the QA agent must verify"
+        ],
+        "architecture_design": {
+          "frontend": "Optional presentation layer for request submission, workflow status, findings, and final output display.",
+          "api": "Authenticated API surface for creating workflow runs, retrieving status, and accessing approved artifacts.",
+          "orchestrator": "Central workflow controller with a state machine controlling agent sequence and failure handling.",
+          "agent_runtime": "Isolated execution context for planner, builder, and QA/security agents with minimum required tools.",
+          "queue": "Recommended for long-running or parallelizable tasks to provide retries, back-pressure, and execution durability.",
+          "persistence": "Relational database for workflow state and object storage for generated artifacts.",
+          "observability": "Structured logs, traces, metrics, workflow correlation IDs, and security audit events.",
+          "deployment": "Separate development, staging, and production environments with independent credentials and policy boundaries."
+        },
+        "acceptance_criteria": [
+          "Every run has a traceable workflow_run_id",
+          "Builder executes only tasks approved by the planner/orchestrator",
+          "QA can block final success",
+          "Critical security failures produce workflow_status=failed",
+          "Secrets never appear in normal agent outputs",
+          "Final synthesis clearly distinguishes completed work, warnings, and unresolved blockers"
+        ]
+      }
     },
     {
       "agent_id": "builder_02",
       "agent_role": "Core Builder",
       "status": "success",
-      "output": "High-level architectural blueprint"
+      "input_contract": {
+        "required": [
+          "approved_plan",
+          "acceptance_criteria",
+          "scoped_tool_permissions"
+        ]
+      },
+      "output": {
+        "mission": "Implement the approved plan while producing auditable artifacts and avoiding unapproved scope expansion.",
+        "implementation_blueprint": {
+          "workflow_state_machine": {
+            "states": [
+              "received",
+              "planning",
+              "building",
+              "qa_review",
+              "blocked",
+              "completed",
+              "failed"
+            ],
+            "rule": "Only the orchestrator may transition the authoritative workflow state."
+          },
+          "agent_message_contract": {
+            "required_fields": [
+              "agent_id",
+              "status",
+              "summary",
+              "artifacts",
+              "findings",
+              "next_action"
+            ],
+            "status_values": [
+              "success",
+              "warning",
+              "blocked",
+              "failed"
+            ]
+          },
+          "error_handling": [
+            "Use bounded retries for transient failures",
+            "Do not retry authorization failures automatically",
+            "Persist failure reason and last successful state",
+            "Mark partial artifacts clearly as unverified",
+            "Require QA rerun after any code or configuration change"
+          ],
+          "deployment_model": [
+            "Build immutable artifacts",
+            "Run automated tests before promotion",
+            "Use environment-specific configuration",
+            "Store secrets in a managed secret store",
+            "Require an explicit production deployment policy"
+          ]
+        },
+        "recommended_repository_structure": [
+          "src/orchestrator/",
+          "src/agents/planner/",
+          "src/agents/builder/",
+          "src/agents/qa/",
+          "src/tools/",
+          "src/security/",
+          "src/schemas/",
+          "tests/",
+          "docs/",
+          ".github/workflows/"
+        ]
+      }
     },
     {
       "agent_id": "qa_03",
       "agent_role": "QA & Security Auditor",
       "status": "success",
-      "output": "Security review and code check"
+      "input_contract": {
+        "required": [
+          "approved_plan",
+          "builder_output",
+          "acceptance_criteria"
+        ]
+      },
+      "output": {
+        "mission": "Independently verify correctness, safety, security, and production readiness before final synthesis.",
+        "security_review": {
+          "risk_level": "medium until implementation-specific controls are verified",
+          "threats": [
+            {
+              "id": "SEC-001",
+              "severity": "critical",
+              "risk": "Prompt injection or malicious task content causes an agent to invoke privileged tools outside the intended scope.",
+              "required_control": "Treat user and retrieved content as untrusted data, enforce tool allowlists at the orchestrator/tool-gateway layer, and never let model text directly grant new permissions."
+            },
+            {
+              "id": "SEC-002",
+              "severity": "critical",
+              "risk": "Secrets, API keys, tokens, or cloud credentials leak into prompts, logs, artifacts, or final responses.",
+              "required_control": "Use a dedicated secret manager, inject secrets only at execution time, redact logs, prohibit secret persistence in agent state, and rotate exposed credentials immediately."
+            },
+            {
+              "id": "SEC-003",
+              "severity": "high",
+              "risk": "An agent performs destructive GitHub, database, or cloud actions without sufficient authorization.",
+              "required_control": "Apply least-privilege credentials, environment-specific roles, protected branches, destructive-action allowlists, and explicit approval gates for high-impact operations."
+            },
+            {
+              "id": "SEC-004",
+              "severity": "high",
+              "risk": "Generated code introduces vulnerable dependencies or malicious package substitution.",
+              "required_control": "Use lockfiles, dependency scanning, provenance checks where available, package allow/deny policies, and automated vulnerability review in CI."
+            },
+            {
+              "id": "SEC-005",
+              "severity": "high",
+              "risk": "Server-side request forgery through URLs supplied to tools or generated by agents.",
+              "required_control": "Restrict outbound networking, validate schemes and destinations, block private/link-local address ranges, constrain redirects, and apply time/size limits."
+            },
+            {
+              "id": "SEC-006",
+              "severity": "high",
+              "risk": "Cross-agent trust allows a compromised or incorrect agent output to be treated as authoritative.",
+              "required_control": "Validate every handoff against a strict schema and treat agent outputs as untrusted until checked by the orchestrator and QA gates."
+            },
+            {
+              "id": "SEC-007",
+              "severity": "medium",
+              "risk": "Sensitive workflow data is retained indefinitely or exposed across users or projects.",
+              "required_control": "Implement tenant isolation, scoped object identifiers, retention policies, access checks on every retrieval, and auditable deletion."
+            },
+            {
+              "id": "SEC-008",
+              "severity": "medium",
+              "risk": "Unbounded agent loops, retries, or tool calls create cost or denial-of-service exposure.",
+              "required_control": "Set per-run budgets for tokens, wall-clock time, retries, tool calls, concurrency, and artifact sizes."
+            }
+          ],
+          "required_security_baseline": [
+            "Authentication for all non-public workflow APIs",
+            "Authorization checks for every repository, project, and artifact operation",
+            "CSRF protection for cookie-authenticated state-changing endpoints",
+            "Secure headers and restrictive CORS",
+            "Input schema validation",
+            "Output encoding appropriate to destination",
+            "Rate limiting",
+            "Centralized secret management",
+            "Dependency and secret scanning in CI",
+            "Audit logs for privileged tool actions",
+            "Backups and tested recovery procedures",
+            "No production credentials in development or CI logs"
+          ]
+        },
+        "qa_review": {
+          "required_tests": [
+            "unit tests for workflow transitions",
+            "schema-validation tests for every agent handoff",
+            "authorization tests for tool gateway actions",
+            "prompt-injection resistance tests",
+            "secret-redaction tests",
+            "retry and timeout tests",
+            "failure-path tests",
+            "integration tests covering planner to builder to QA",
+            "end-to-end test verifying QA can block completion",
+            "dependency and secret scans"
+          ],
+          "release_gate": {
+            "pass_conditions": [
+              "all critical tests pass",
+              "no unresolved critical or high security findings",
+              "build is reproducible",
+              "required environment variables are documented",
+              "rollback procedure exists",
+              "observability is enabled"
+            ],
+            "fail_conditions": [
+              "critical security finding",
+              "failed authorization boundary test",
+              "known secret exposure",
+              "QA unable to reproduce builder result",
+              "missing rollback path for production deployment"
+            ]
+          }
+        }
+      }
     }
   ],
-  "final_synthesized_result": "The final unified production-ready output assembled for the end user display"
+  "security_posture": {
+    "current_assessment": "Architecture is suitable as a reference design, but production readiness depends on implementing and verifying the listed controls in code and infrastructure.",
+    "priority_actions": [
+      "Implement strict schemas for all agent inputs and outputs",
+      "Build a centralized tool gateway with least-privilege permissions",
+      "Add secret isolation and redaction",
+      "Add CI security scanning and automated tests",
+      "Add persistent audit logging with workflow correlation IDs",
+      "Add production approval gates and rollback support"
+    ]
+  },
+  "final_synthesized_result": {
+    "status": "reference_architecture_ready",
+    "summary": "The system should use an orchestrator-controlled Planner -> Builder -> QA/Security pipeline. Agents have narrow responsibilities and communicate through schema-validated handoffs. Privileged tool access is centralized behind a least-privilege gateway. Workflow state, artifacts, findings, and audit events are persisted. QA and security checks are blocking gates rather than advisory steps.",
+    "recommended_next_build": [
+      "Create the orchestrator state machine",
+      "Define JSON schemas for agent contracts",
+      "Implement the three agent modules",
+      "Implement the secured tool gateway",
+      "Add persistence and audit logging",
+      "Add automated QA/security gates",
+      "Add CI workflows",
+      "Deploy first to staging",
+      "Complete end-to-end security validation before production"
+    ],
+    "production_readiness": "not yet production-deployed; architecture and security requirements are now explicitly defined"
+  }
 }
