@@ -28,6 +28,29 @@ test('multi-provider falls back after primary failure', async () => {
   assert.deepEqual(out, { ok: true });
 });
 
+test('explicit provider selection disables fallback', async () => {
+  const calls=[];
+  const provider=new MultiProvider({providers:[
+    {name:'groq',async generate(){calls.push('groq');return{answer:'g'}}},
+    {name:'nvidia-nim',async generate(){calls.push('nvidia');return{answer:'n'}}}
+  ]});
+  const selected=provider.select('nvidia-nim');
+  const out=await selected.generate({});
+  assert.equal(out.answer,'n');
+  assert.deepEqual(calls,['nvidia']);
+});
+
+test('auto selection preserves fallback router',()=>{
+  const provider=new MultiProvider({providers:[{name:'groq',async generate(){return{}}}]});
+  assert.equal(provider.select('auto'),provider);
+  assert.deepEqual(provider.names(),['groq']);
+});
+
+test('unknown provider selection fails clearly',()=>{
+  const provider=new MultiProvider({providers:[{name:'groq',async generate(){return{}}}]});
+  assert.throws(()=>provider.select('missing'),/not configured/);
+});
+
 test('multi-provider uses the first provider that supports research', async () => {
   const calls=[];
   const provider=new MultiProvider({providers:[
