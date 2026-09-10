@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { PlannerAgent, BuilderAgent, QaAgent } from './agents.js';
 import { DeliveryGate } from './delivery.js';
 import { GitHubRestClient } from './github-client.js';
@@ -79,9 +80,7 @@ const server = createService({
   maxBodyBytes: Number(process.env.MAX_REQUEST_BYTES || 1024 * 1024),
   readinessCheck: async () => {
     await fs.mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-    await fs.access(stateDirectory, fs.constants?.R_OK | fs.constants?.W_OK).catch(async () => {
-      await fs.access(stateDirectory);
-    });
+    await fs.access(stateDirectory, fsConstants.R_OK | fsConstants.W_OK);
     return {
       ok: true,
       provider_configured: Boolean(provider),
