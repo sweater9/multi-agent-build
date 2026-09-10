@@ -27,3 +27,14 @@ test('multi-provider falls back after primary failure', async () => {
   assert.deepEqual(calls, ['primary', 'fallback']);
   assert.deepEqual(out, { ok: true });
 });
+
+test('multi-provider uses the first provider that supports research', async () => {
+  const calls=[];
+  const provider=new MultiProvider({providers:[
+    {name:'plain',async generate(){return{};}},
+    {name:'researcher',async generate(){return{};},async research(){calls.push('researcher');return{answer:'evidence',sources:[]}}}
+  ]});
+  const out=await provider.research({goal:'latest'});
+  assert.equal(out.answer,'evidence');
+  assert.deepEqual(calls,['researcher']);
+});

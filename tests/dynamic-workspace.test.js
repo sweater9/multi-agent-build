@@ -11,3 +11,14 @@ test('dynamic workspace selects specialists in parallel then judges and QA revie
 });
 
 test('dynamic workspace falls back to safe default specialists when planner team is malformed',async()=>{const provider={async generate({agentRole}){if(agentRole==='dynamic_planner')return{objective:'x',approach:'y',specialists:[]};if(agentRole==='specialist')return{answer:'view'};if(agentRole==='judge')return{answer:'candidate',confidence:70};return{approved:true,answer:'final',quality_score:80,findings:[]}}};const result=await new DynamicPromptWorkspace({provider}).execute('Analyze this');assert.equal(result.agent_team.length,2);assert.equal(result.status,'completed')});
+
+test('research mode runs provenance step and passes sources through the workflow',async()=>{
+  const calls=[];
+  const research={answer:'Current evidence [1]',sources:[{title:'Official source',url:'https://example.gov/rule'}],provider:'groq/compound'};
+  const provider={
+    async research({goal}){calls.push({agentRole:'research',goal});return research},
+    async generate({agentRole,input}){calls.push({agentRole,input});if(agentRole==='dynamic_planner')return{objective:'Research task',approach:'Evidence first',specialists:[{name:'Research Analyst',focus:'Interpret evidence'},{name:'Critical Reviewer',focus:'Challenge conclusions'}]};if(agentRole==='specialist')return{answer:'Grounded view',key_points:[],assumptions:[],risks:[]};if(agentRole==='judge')return{answer:'Grounded synthesis [1]',agreements:[],disagreements:[],confidence:88,limitations:[]};return{approved:true,answer:'Final grounded answer [1]',findings:[],quality_score:94}}
+  };
+  const result=await new DynamicPromptWorkspace({provider}).execute('What changed?',{research:true});
+  assert.equal(result.research_mode,true);assert.equal(result.sources.length,1);assert.equal(result.sources[0].url,'https://example.gov/rule');assert.equal(result.agents.researcher.name,'Web Researcher');assert.equal(calls[0].agentRole,'research');assert.ok(calls.find(x=>x.agentRole==='specialist').input.research);
+});
