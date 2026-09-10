@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MultiProvider, createModelProviderFromEnvironment } from '../src/model-provider.js';
+import { MultiProvider, OpenAICompatibleProvider, createModelProviderFromEnvironment } from '../src/model-provider.js';
 
 test('environment selects Groq first and NVIDIA NIM second', () => {
   const provider = createModelProviderFromEnvironment({ GROQ_API_KEY: 'g', NVIDIA_NIM_API_KEY: 'n' });
@@ -37,4 +37,12 @@ test('multi-provider uses the first provider that supports research', async () =
   const out=await provider.research({goal:'latest'});
   assert.equal(out.answer,'evidence');
   assert.deepEqual(calls,['researcher']);
+});
+
+test('dynamic roles use bounded token budgets below provider maximum',()=>{
+  const provider=new OpenAICompatibleProvider({endpoint:'https://example.com/v1/chat/completions',apiKey:'x',model:'test',maxTokens:4000});
+  assert.equal(provider.tokenBudget('dynamic_planner'),650);
+  assert.equal(provider.tokenBudget('specialist'),900);
+  assert.equal(provider.tokenBudget('judge'),1400);
+  assert.equal(provider.tokenBudget('dynamic_qa'),900);
 });
