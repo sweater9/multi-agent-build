@@ -12,8 +12,17 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
+      - key: WORKFLOW_STATE_BACKEND
+        value: file
       - key: WORKFLOW_STATE_DIR
         value: /tmp/multi-agent-runs
+      - key: REQUIRE_DURABLE_STATE
+        value: "false"
+      # Production durable mode: attach a persistent disk at /var/data, then set
+      # WORKFLOW_STATE_DIR=/var/data/multi-agent-runs,
+      # DURABLE_STATE_MOUNT=/var/data, and REQUIRE_DURABLE_STATE=true.
+      - key: DURABLE_STATE_MOUNT
+        sync: false
       - key: MAX_REPAIR_ATTEMPTS
         value: "2"
       - key: MAX_REQUEST_BYTES
