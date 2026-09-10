@@ -8,6 +8,11 @@ function splitRepository(repository) {
   return { owner, repo };
 }
 
+function boundedText(value, max = 4000) {
+  const text = String(value || '');
+  return text.length <= max ? text : `${text.slice(0, max)}\n...[truncated]`;
+}
+
 export class GitHubRestClient {
   constructor({ token, apiBase = 'https://api.github.com', fetchImpl = globalThis.fetch } = {}) {
     if (!token) throw new Error('GitHub token is required');
@@ -21,6 +26,7 @@ export class GitHubRestClient {
     const { owner, repo } = splitRepository(repository);
     const response = await this.fetch(`${this.apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${path}`, {
       method,
+      redirect: 'error',
       headers: {
         accept: 'application/vnd.github+json',
         authorization: `Bearer ${this.token}`,
@@ -32,11 +38,11 @@ export class GitHubRestClient {
     const text = await response.text();
     let data = null;
     if (text) {
-      try { data = JSON.parse(text); } catch { data = { message: text }; }
+      try { data = JSON.parse(text); } catch { data = { message: boundedText(text) }; }
     }
     if (!response.ok) {
       const message = data?.message || `GitHub request failed with ${response.status}`;
-      throw new Error(message);
+      throw new Error(boundedText(message, 1000));
     }
     return data;
   }
@@ -90,7 +96,7 @@ export class GitHubRestClient {
     return { number: data.number, url: data.html_url, state: data.state, head: data.head?.ref, base: data.base?.ref };
   }
 
-  async ciStatus({ repository, ref }) {
+  async getCiStatus({ repository, ref }) {
     const runs = await this.request('GET', repository, `/actions/runs?branch=${encodeURIComponent(ref)}&per_page=20`);
     const relevant = Array.isArray(runs.workflow_runs) ? runs.workflow_runs : [];
     if (relevant.length === 0) return { status: 'unknown', checks: [] };
@@ -100,9 +106,11 @@ export class GitHubRestClient {
       if (!latestByWorkflow.has(key)) latestByWorkflow.set(key, run);
     }
     const checks = [...latestByWorkflow.values()].map((run) => ({
+      id: run.id,
       name: run.name,
       status: run.status,
-      conclusion: run.conclusion
+      conclusion: run.conclusion,
+      url: run.html_url || null
     }));
     const pending = checks.some((check) => check.status !== 'completed');
     const failed = checks.some((check) => check.status === 'completed' && check.conclusion !== 'success');
@@ -110,5 +118,24 @@ export class GitHubRestClient {
       status: pending ? 'in_progress' : failed ? 'failure' : 'success',
       checks
     };
+  }
+
+  async ciDiagnostics({ repository, runId, maxJobs = 10 }) {
+    if (!Number.isInteger(Number(runId))) throw new Error('runId must be an integer');
+    const data = await this.request('GET', repository, `/actions/runs/${Number(runId)}/jobs?per_page=${Math.min(Math.max(maxJobs, 1), 20)}`);
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    return jobs.map((job) => ({
+      id: job.id,
+      name: job.name,
+      status: job.status,
+      conclusion: job.conclusion,
+      failed_steps: Array.isArray(job.steps)
+        ? job.steps.filter((step) => step.conclusion && step.conclusion !== 'success' && step.conclusion !== 'skipped').map((step) => ({ name: step.name, conclusion: step.conclusion }))
+        : []
+    }));
+  }
+
+  async ciStatus(args) {
+    return this.getCiStatus(args);
   }
 }
