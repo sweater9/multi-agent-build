@@ -1,0 +1,6 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {createBrowserQaPlan,normalizeBrowserQa,browserRepairEvidence} from '../src/browser-qa.js';import {BrowserQaRunner} from '../src/browser-qa-runner.js';
+const files=[{path:'package.json',content:JSON.stringify({scripts:{preview:'vite preview'}})}];
+test('browser QA selects a runnable web script',()=>{const p=createBrowserQaPlan(files,{targetType:'webapp'});assert.equal(p.enabled,true);assert.deepEqual(p.start.command.slice(0,3),['npm','run','preview']);assert.equal(p.start.network,'off')});
+test('mobile browser QA stays disabled',()=>assert.equal(createBrowserQaPlan(files,{targetType:'mobile'}).enabled,false));
+test('blocking browser issue fails normalized QA',()=>{const q=normalizeBrowserQa({passed:true,issues:[{type:'pageerror',severity:'blocking',message:'boom'}]});assert.equal(q.passed,false);assert.equal(q.blocking_count,1);assert.equal(browserRepairEvidence(q).category,'browser_qa')});
+test('runner reports skipped when no web start command exists',async()=>{const r=new BrowserQaRunner({executor:{inspect:async()=>{throw new Error('must not run')}}});const q=await r.run([{path:'package.json',content:'{}'}],{targetType:'webapp'});assert.equal(q.skipped,true);assert.equal(q.executed,false)});
