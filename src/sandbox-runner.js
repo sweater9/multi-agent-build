@@ -1,0 +1,40 @@
+import { createExecutionPlan, summarizeExecution } from './execution-policy.js';
+
+function safeResult(value) {
+  if (!value || typeof value !== 'object') throw new Error('Sandbox returned an invalid result');
+  return value;
+}
+
+export class ControlledSandboxRunner {
+  constructor({ executor, policy = createExecutionPlan } = {}) {
+    if (!executor?.execute) throw new Error('sandbox executor is required');
+    this.executor = executor;
+    this.policy = policy;
+  }
+
+  async run(files, context = {}) {
+    const plan = this.policy(files, context.limits);
+    if (plan.runtime === 'static' || plan.steps.length === 0) return { passed: true, runtime: plan.runtime, steps: [], summary: { passed: true, failed_step: null, diagnostics: '', steps: [] } };
+    const raw = safeResult(await this.executor.execute({ files, plan, project_id: context.projectId, attempt: context.attempt ?? 0 }));
+    const summary = summarizeExecution(raw);
+    return { ...raw, runtime: plan.runtime, plan: { steps: plan.steps.map(({ name, command, network }) => ({ name, command, network })), limits: plan.limits }, summary, passed: summary.passed };
+  }
+}
+
+export class HttpSandboxExecutor {
+  constructor({ endpoint, token = '', fetchImpl = globalThis.fetch, timeoutMs = 240000 } = {}) {
+    if (!/^https:\/\//.test(String(endpoint || ''))) throw new Error('Sandbox endpoint must use HTTPS');
+    if (typeof fetchImpl !== 'function') throw new Error('fetch implementation is required');
+    this.endpoint = String(endpoint).replace(/\/$/, ''); this.token = token; this.fetch = fetchImpl; this.timeoutMs = timeoutMs;
+  }
+
+  async execute(payload) {
+    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetch(`${this.endpoint}/v1/execute`, { method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json', ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) }, body: JSON.stringify(payload) });
+      const text = await response.text(); let data; try { data = JSON.parse(text); } catch { throw new Error('Sandbox returned non-JSON output'); }
+      if (!response.ok) throw new Error(String(data?.message || `Sandbox failed with ${response.status}`).slice(0, 1000));
+      return data;
+    } finally { clearTimeout(timer); }
+  }
+}
