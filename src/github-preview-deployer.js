@@ -1,0 +1,8 @@
+function safeFiles(files){return (Array.isArray(files)?files:[]).map(f=>({path:String(f.path||'').replace(/^\/+/,''),content:String(f.content||'')})).filter(f=>f.path&&!f.path.includes('..')).slice(0,120)}
+export class GitHubPreviewDeployer{
+ constructor({client,repository,base='main'}={}){if(!client)throw new Error('GitHub client is required');if(!repository)throw new Error('repository is required');this.client=client;this.repository=repository;this.base=base}
+ async deploy({project,plan}){if(plan.provider!=='github-pages')return{deployed:false,error:'unsupported_provider'};const branch=plan.branch;try{await this.client.createBranch({repository:this.repository,branch,base:this.base})}catch(error){if(!/Reference already exists|already exists/i.test(String(error.message)))throw error}
+  for(const file of safeFiles(project.files)){let current=null;try{current=await this.client.readFile({repository:this.repository,path:file.path,ref:branch})}catch{}if(current?.sha)await this.client.updateFile({repository:this.repository,branch,path:file.path,content:file.content,message:`Update preview: ${project.project_name||project.project_id}`,sha:current.sha});else await this.client.createFile({repository:this.repository,branch,path:file.path,content:file.content,message:`Add preview: ${project.project_name||project.project_id}`})}
+  const ci=await this.client.getCiStatus({repository:this.repository,ref:branch});return{deployed:false,status:'preview_branch_ready',branch,repository:this.repository,ci,requires_provider_activation:true,note:'Preview branch is prepared. Hosting activation remains a separate approved action.'}
+ }
+}
