@@ -1,3 +1,5 @@
+import { classifyFailure } from './execution-diagnostics.js';
+
 const MAX_FILES = 120;
 const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
@@ -25,5 +27,12 @@ export function createExecutionPlan(files, { timeoutMs = 180000, memoryMb = 768 
 export function summarizeExecution(result) {
   const steps = Array.isArray(result?.steps) ? result.steps : [];
   const failed = steps.find((step) => step.status !== 'success');
-  return { passed: Boolean(result?.passed) && !failed, failed_step: failed?.name || null, diagnostics: String(failed?.stderr || failed?.stdout || result?.error || '').slice(0, 12000), steps: steps.map(({ name, status, exit_code }) => ({ name, status, exit_code: exit_code ?? null })) };
+  const failure = failed ? classifyFailure({ step: failed.name, stderr: failed.stderr, stdout: failed.stdout, error: result?.error }) : null;
+  return {
+    passed: Boolean(result?.passed) && !failed,
+    failed_step: failed?.name || null,
+    diagnostics: failure?.raw || String(result?.error || '').slice(0, 12000),
+    failure,
+    steps: steps.map(({ name, status, exit_code, duration_ms }) => ({ name, status, exit_code: exit_code ?? null, duration_ms: duration_ms ?? null }))
+  };
 }
