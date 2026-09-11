@@ -5,7 +5,8 @@ export function createBrowserQaPlan(files,{targetType='webapp'}={}){
  let pkg=null;try{pkg=JSON.parse(files.find(f=>f.path==='package.json')?.content||'null')}catch{}
  const scripts=pkg?.scripts||{};const start=scripts.preview?'preview':scripts.start?'start':scripts.dev?'dev':null;
  if(!start)return{enabled:false,reason:'no-runnable-web-script'};
- return{enabled:true,start:{name:'serve',command:['npm','run',start,'--','--host','0.0.0.0'],network:'off'},checks:[
+ const command=start==='start'?['npm','run','start']:['npm','run',start,'--','--host','0.0.0.0','--port','4173'];
+ return{enabled:true,port:4173,start:{name:'serve',command,network:'off',env:{PORT:'4173',HOST:'0.0.0.0'}},checks:[
   {id:'page-load',kind:'navigation',path:'/'},{id:'console-errors',kind:'console'},{id:'runtime-errors',kind:'pageerror'},{id:'failed-requests',kind:'requestfailed'},{id:'basic-accessibility',kind:'accessibility'}
  ]};
 }
