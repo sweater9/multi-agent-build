@@ -1,0 +1,29 @@
+services:
+  npm-registry:
+    image: verdaccio/verdaccio:6.10.2
+    container_name: npm-registry
+    restart: unless-stopped
+    networks:
+      sandbox-registry:
+        aliases:
+          - npm-registry
+      registry-egress: {}
+    volumes:
+      - verdaccio-storage:/verdaccio/storage
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+
+networks:
+  sandbox-registry:
+    name: multi-agent-registry
+    internal: true
+  registry-egress:
+    name: multi-agent-registry-egress
+
+volumes:
+  verdaccio-storage:
