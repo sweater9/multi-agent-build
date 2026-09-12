@@ -21,6 +21,30 @@ jobs:
           set -euo pipefail
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --max-time 60 "$LIVE_URL/builder" | grep -q 'Autonomous Builder'
 
+      - name: Check readiness
+        run: |
+          set -euo pipefail
+          code=$(curl --silent --show-error --max-time 120 -o ready.json -w '%{http_code}' "$LIVE_URL/ready")
+          echo "READY HTTP $code"
+          cat ready.json
+          echo
+          if [ "$code" != "200" ]; then
+            exit 1
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const d = JSON.parse(fs.readFileSync('ready.json','utf8'));
+          const failures = [];
+          if (!d.codesandbox_configured) failures.push('codesandbox_configured=false');
+          if (!d.sandbox_worker_ready) failures.push('sandbox_worker_ready=false');
+          if (!d.browser_qa_configured) failures.push('browser_qa_configured=false');
+          if (!d.browser_qa_worker_ready) failures.push('browser_qa_worker_ready=false');
+          if (failures.length) {
+            console.error('Readiness failed:', failures.join(', '));
+            process.exit(1);
+          }
+          NODE
+
       - name: Run end-to-end web build
         run: |
           set -euo pipefail
@@ -79,6 +103,7 @@ jobs:
         with:
           name: live-codesandbox-smoke
           path: |
+            ready.json
             payload.json
             response.json
           if-no-files-found: ignore
