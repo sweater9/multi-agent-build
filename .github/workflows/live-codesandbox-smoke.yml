@@ -1,0 +1,78 @@
+name: Live CodeSandbox Smoke
+
+on:
+  push:
+    branches:
+      - test/live-codesandbox-smoke
+
+permissions:
+  contents: read
+
+env:
+  LIVE_URL: https://multi-agent-build.onrender.com
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Check builder page
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 5 --retry-delay 5 --max-time 60 "$LIVE_URL/builder" | grep -q 'Autonomous Builder'
+
+      - name: Run end-to-end web build
+        run: |
+          set -euo pipefail
+          cat > payload.json <<'JSON'
+          {
+            "goal": "Build a minimal Vite web app for smoke testing. Show an h1 with the exact text Multi-Agent Smoke Test and a paragraph saying Runtime verified. Include minimal automated tests, a check script, and a build script. Do not use external APIs, databases, authentication, images, fonts, analytics, or network resources.",
+            "mode": "build",
+            "target_type": "webapp",
+            "provider": "auto",
+            "project_name": "Live CodeSandbox Smoke"
+          }
+          JSON
+          curl --fail --silent --show-error \
+            --retry 2 --retry-delay 5 \
+            --max-time 600 \
+            -H 'content-type: application/json' \
+            --data-binary @payload.json \
+            "$LIVE_URL/api/builder/run" > response.json
+          node <<'NODE'
+          const fs = require('fs');
+          const d = JSON.parse(fs.readFileSync('response.json','utf8'));
+          const summary = {
+            project_id: d.project_id,
+            status: d.status,
+            execution_status: d.execution_status,
+            capabilities: d.capabilities,
+            execution: d.execution,
+            browser_qa: d.browser_qa,
+            verification: d.verification
+          };
+          console.log(JSON.stringify(summary, null, 2));
+          const failures = [];
+          if (!d.capabilities?.code_executed) failures.push('code_executed=false');
+          if (!d.execution?.passed) failures.push('execution.passed=false');
+          if (!d.capabilities?.tests_executed) failures.push('tests_executed=false');
+          if (!d.capabilities?.build_executed) failures.push('build_executed=false');
+          if (!d.capabilities?.browser_qa_executed) failures.push('browser_qa_executed=false');
+          if (!d.capabilities?.browser_qa_passed) failures.push('browser_qa_passed=false');
+          if (d.status !== 'browser_verified') failures.push(`status=${d.status}`);
+          if (failures.length) {
+            console.error('Smoke test failed:', failures.join(', '));
+            process.exit(1);
+          }
+          NODE
+
+      - name: Preserve diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-codesandbox-smoke
+          path: |
+            payload.json
+            response.json
+          if-no-files-found: ignore
+          retention-days: 3
