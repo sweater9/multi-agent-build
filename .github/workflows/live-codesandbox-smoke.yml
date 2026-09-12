@@ -33,12 +33,19 @@ jobs:
             "project_name": "Live CodeSandbox Smoke"
           }
           JSON
-          curl --fail --silent --show-error \
-            --retry 2 --retry-delay 5 \
+          code=$(curl --silent --show-error \
             --max-time 600 \
             -H 'content-type: application/json' \
             --data-binary @payload.json \
-            "$LIVE_URL/api/builder/run" > response.json
+            -o response.json \
+            -w '%{http_code}' \
+            "$LIVE_URL/api/builder/run")
+          echo "HTTP $code"
+          cat response.json
+          echo
+          if [ "$code" != "200" ]; then
+            exit 1
+          fi
           node <<'NODE'
           const fs = require('fs');
           const d = JSON.parse(fs.readFileSync('response.json','utf8'));
