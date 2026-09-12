@@ -8,7 +8,9 @@ Set `CSB_API_KEY` (or `CODESANDBOX_API_KEY`) on the application service. Never c
 
 Optional execution settings:
 
-- `CODESANDBOX_SANDBOX_ID`: reuse a known sandbox/Devbox ID. If omitted, execution creates an isolated sandbox and hibernates it after the run.
+- `CODESANDBOX_SANDBOX_ID`: reuse a known sandbox/Devbox ID.
+- `CODESANDBOX_SANDBOX_TITLE`: resolve one reusable sandbox by exact title when the internal ID is not known. Resolution fails closed if zero or multiple exact matches exist.
+- If neither reusable ID nor title is configured, execution creates an isolated sandbox and hibernates it after the run.
 - `CODESANDBOX_HIBERNATE_AFTER_RUN`: defaults to `true` for ephemeral sandboxes.
 - `CODESANDBOX_MAX_OUTPUT_BYTES`: defaults to `256000`.
 - `CODESANDBOX_WORKSPACE_ROOT`: defaults to `/tmp/multi-agent-build`.
@@ -19,7 +21,7 @@ When a CodeSandbox API key is configured, CodeSandbox becomes the primary execut
 
 The existing execution policy still decides which commands are requested. The provider:
 
-1. Acquires an existing configured sandbox or creates an ephemeral one.
+1. Resolves an explicitly configured reusable sandbox, or creates an ephemeral one.
 2. Connects through the CodeSandbox SDK.
 3. Stages only the generated project files under an isolated run directory.
 4. Executes install/check/test/build steps sequentially.
@@ -34,16 +36,20 @@ CodeSandbox microVM isolation is useful for temporary remote execution, but this
 
 ## Existing `multi-agent` Devbox
 
-The manually validated Devbox can be reused temporarily if its actual CodeSandbox sandbox ID is supplied through `CODESANDBOX_SANDBOX_ID`. Do not infer the API sandbox ID from a browser URL slug without checking it in CodeSandbox first.
+The validated Devbox can be selected without guessing its browser slug by setting:
+
+`CODESANDBOX_SANDBOX_TITLE=multi-agent`
+
+At startup the SDK lists sandbox metadata and accepts the Devbox only when exactly one sandbox has that title. If there is no match or more than one match, startup fails and requires an explicit `CODESANDBOX_SANDBOX_ID`.
 
 ## CodeSandbox Browser QA
 
-Browser QA is intentionally opt-in and requires the reusable Devbox because that environment has already been validated with Playwright/Chromium.
+Browser QA is intentionally opt-in and requires a reusable Devbox because that environment has already been validated with Playwright/Chromium.
 
 Set:
 
 - `CODESANDBOX_BROWSER_QA_ENABLED=true`
-- `CODESANDBOX_SANDBOX_ID=<actual sandbox id>`
+- either `CODESANDBOX_SANDBOX_ID=<actual sandbox id>` or `CODESANDBOX_SANDBOX_TITLE=multi-agent`
 - `CODESANDBOX_PLAYWRIGHT_ROOT=/tmp/mab-test` if Playwright was installed in the validated helper directory used during validation.
 - `CODESANDBOX_BROWSER_WORKSPACE_ROOT` optionally changes the staged browser-QA project root.
 
