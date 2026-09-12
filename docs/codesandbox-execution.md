@@ -6,7 +6,7 @@ CodeSandbox can be used as the temporary execution provider for Multi-Agent Buil
 
 Set `CSB_API_KEY` (or `CODESANDBOX_API_KEY`) on the application service. Never commit the token.
 
-Optional settings:
+Optional execution settings:
 
 - `CODESANDBOX_SANDBOX_ID`: reuse a known sandbox/Devbox ID. If omitted, execution creates an isolated sandbox and hibernates it after the run.
 - `CODESANDBOX_HIBERNATE_AFTER_RUN`: defaults to `true` for ephemeral sandboxes.
@@ -17,21 +17,38 @@ When a CodeSandbox API key is configured, CodeSandbox becomes the primary execut
 
 ## Execution behavior
 
-The existing execution policy still decides what is allowed to run. The provider only executes the already-bounded plan:
+The existing execution policy still decides which commands are requested. The provider:
 
-1. Acquire an existing configured sandbox or create an ephemeral one.
-2. Connect through the CodeSandbox SDK.
-3. Stage only the generated project files under an isolated run directory.
-4. Execute install/check/test/build steps sequentially.
-5. Stop on the first failure and return bounded diagnostics to the repair loop.
-6. Hibernate newly-created sandboxes after the run.
+1. Acquires an existing configured sandbox or creates an ephemeral one.
+2. Connects through the CodeSandbox SDK.
+3. Stages only the generated project files under an isolated run directory.
+4. Executes install/check/test/build steps sequentially.
+5. Stops on the first failure and returns bounded diagnostics to the repair loop.
+6. Hibernates newly-created sandboxes after the run.
 
 The provider rejects absolute/traversal file paths and clamps captured command output.
+
+### Security difference from the hardened Docker worker
+
+CodeSandbox microVM isolation is useful for temporary remote execution, but this adapter does **not** currently enforce the per-step `network: off` policy used by the hardened Docker worker. Readiness therefore reports `sandbox_network_policy_enforced: false` when CodeSandbox is active. Do not treat CodeSandbox as security-equivalent to the self-hosted worker for hostile code or workloads requiring strict egress control.
 
 ## Existing `multi-agent` Devbox
 
 The manually validated Devbox can be reused temporarily if its actual CodeSandbox sandbox ID is supplied through `CODESANDBOX_SANDBOX_ID`. Do not infer the API sandbox ID from a browser URL slug without checking it in CodeSandbox first.
 
-## Browser QA
+## CodeSandbox Browser QA
 
-This release does not replace the existing browser-QA transport. `BROWSER_QA_RUNNER_URL` continues to use the hardened HTTP browser worker. CodeSandbox browser QA is a separate follow-up so that Playwright process lifecycle, preview ports and screenshot handling can be tested independently instead of weakening the existing browser gate.
+Browser QA is intentionally opt-in and requires the reusable Devbox because that environment has already been validated with Playwright/Chromium.
+
+Set:
+
+- `CODESANDBOX_BROWSER_QA_ENABLED=true`
+- `CODESANDBOX_SANDBOX_ID=<actual sandbox id>`
+- `CODESANDBOX_PLAYWRIGHT_ROOT=/tmp/mab-test` if Playwright was installed in the validated helper directory used during validation.
+- `CODESANDBOX_BROWSER_WORKSPACE_ROOT` optionally changes the staged browser-QA project root.
+
+The Browser QA adapter stages the project, installs project dependencies with lifecycle scripts disabled, launches the project on localhost port 4173, waits for readiness, then runs Playwright from the configured helper installation. It checks page load, console errors, runtime errors, failed requests, missing image alt text, and unlabeled form controls. The project server is terminated after inspection.
+
+Browser QA does not require a public preview URL because Playwright and the application run inside the same Devbox and communicate over localhost.
+
+As with execution, CodeSandbox Browser QA does not enforce strict egress isolation; readiness reports `browser_qa_network_policy_enforced: false`. If `CODESANDBOX_BROWSER_QA_ENABLED` is absent or false, the existing `BROWSER_QA_RUNNER_URL` hardened worker remains the fallback.
