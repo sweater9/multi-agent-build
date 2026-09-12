@@ -3,60 +3,12 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { GitHubWorkflowEventHandler } from '../src/webhook.js';
 import { MemoryStateStore } from '../src/state-store.js';
-
-function sign(secret, body) {
-  return `sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`;
-}
-
-function payload(status = 'completed') {
-  return JSON.stringify({
-    repository: { full_name: 'owner/repo' },
-    workflow_run: { id: 123, status, conclusion: status === 'completed' ? 'success' : null, head_branch: 'feature/agent-build' }
-  });
-}
-
-test('rejects invalid signature', async () => {
-  const store = new MemoryStateStore();
-  const handler = new GitHubWorkflowEventHandler({ orchestrator: { resume: async () => ({}) }, stateStore: store, webhookSecret: 'secret' });
-  const result = await handler.handle({ event: 'workflow_run', deliveryId: 'd1', signature: 'sha256=bad', rawBody: payload() });
-  assert.equal(result.status, 401);
-});
-
-test('resumes matching awaiting workflow exactly once per delivery', async () => {
-  const store = new MemoryStateStore();
-  await store.save({
-    workflow_run_id: 'abc-123',
-    state: 'awaiting_ci',
-    delivery: { target: { repository: 'owner/repo', branch: 'feature/agent-build', base: 'main' } }
-  });
-  let calls = 0;
-  const handler = new GitHubWorkflowEventHandler({
-    stateStore: store,
-    webhookSecret: 'secret',
-    orchestrator: { resume: async (id) => { calls += 1; return { workflow_run_id: id, workflow_status: 'completed', final_synthesized_result: { ready_for_merge: true } }; } }
-  });
-  const body = payload();
-  const input = { event: 'workflow_run', deliveryId: 'd2', signature: sign('secret', body), rawBody: body };
-  const first = await handler.handle(input);
-  const second = await handler.handle(input);
-  assert.equal(first.accepted, true);
-  assert.equal(first.resumed_workflows[0].ready_for_merge, true);
-  assert.equal(calls, 1);
-  assert.equal(second.reason, 'duplicate_delivery');
-});
-
-test('ignores completed workflow with no matching awaiting run', async () => {
-  const store = new MemoryStateStore();
-  const body = payload();
-  const handler = new GitHubWorkflowEventHandler({ orchestrator: { resume: async () => { throw new Error('should not run'); } }, stateStore: store, webhookSecret: 'secret' });
-  const result = await handler.handle({ event: 'workflow_run', deliveryId: 'd3', signature: sign('secret', body), rawBody: body });
-  assert.equal(result.reason, 'no_matching_workflow');
-});
-
-test('ignores workflow events until GitHub marks them completed', async () => {
-  const store = new MemoryStateStore();
-  const body = payload('in_progress');
-  const handler = new GitHubWorkflowEventHandler({ orchestrator: { resume: async () => { throw new Error('should not run'); } }, stateStore: store, webhookSecret: 'secret' });
-  const result = await handler.handle({ event: 'workflow_run', deliveryId: 'd4', signature: sign('secret', body), rawBody: body });
-  assert.equal(result.reason, 'workflow_not_completed');
-});
+function sign(secret,body){return `sha256=${crypto.createHmac('sha256',secret).update(body).digest('hex')}`}
+function payload({status='completed',conclusion=status==='completed'?'success':null,branch='feature/agent-build',repository='owner/repo',id=123}={}){return JSON.stringify({repository:{full_name:repository},workflow_run:{id,status,conclusion,head_branch:branch,name:'CI'}})}
+test('rejects invalid signature',async()=>{const store=new MemoryStateStore(),handler=new GitHubWorkflowEventHandler({orchestrator:{resume:async()=>({})},stateStore:store,webhookSecret:'secret'}),result=await handler.handle({event:'workflow_run',deliveryId:'d1',signature:'sha256=bad',rawBody:payload()});assert.equal(result.status,401)});
+test('resumes matching awaiting workflow exactly once per delivery',async()=>{const store=new MemoryStateStore();await store.save({workflow_run_id:'abc-123',state:'awaiting_ci',delivery:{target:{repository:'owner/repo',branch:'feature/agent-build',base:'main'}}});let calls=0;const handler=new GitHubWorkflowEventHandler({stateStore:store,webhookSecret:'secret',orchestrator:{resume:async id=>{calls++;return{workflow_run_id:id,workflow_status:'completed',final_synthesized_result:{ready_for_merge:true}}}}}),body=payload(),input={event:'workflow_run',deliveryId:'d2',signature:sign('secret',body),rawBody:body},first=await handler.handle(input),second=await handler.handle(input);assert.equal(first.accepted,true);assert.equal(first.resumed_workflows[0].ready_for_merge,true);assert.equal(calls,1);assert.equal(second.reason,'duplicate_delivery')});
+test('ignores completed workflow with no matching awaiting run',async()=>{const store=new MemoryStateStore(),body=payload(),handler=new GitHubWorkflowEventHandler({orchestrator:{resume:async()=>{throw new Error('should not run')}},stateStore:store,webhookSecret:'secret'}),result=await handler.handle({event:'workflow_run',deliveryId:'d3',signature:sign('secret',body),rawBody:body});assert.equal(result.reason,'no_matching_workflow')});
+test('ignores workflow events until GitHub marks them completed',async()=>{const store=new MemoryStateStore(),body=payload({status:'in_progress',conclusion:null}),handler=new GitHubWorkflowEventHandler({orchestrator:{resume:async()=>{throw new Error('should not run')}},stateStore:store,webhookSecret:'secret'}),result=await handler.handle({event:'workflow_run',deliveryId:'d4',signature:sign('secret',body),rawBody:body});assert.equal(result.reason,'workflow_not_completed')});
+test('failed allowlisted Improve workflow triggers CI repair',async()=>{const store=new MemoryStateStore();let args=null;const ciRepair={repair:async input=>{args=input;return{status:'repair_published',changes:['src/app.js']}}},handler=new GitHubWorkflowEventHandler({orchestrator:{resume:async()=>({})},stateStore:store,webhookSecret:'secret',ciRepair,improveRepositories:['owner/repo'],maxCiRepairAttempts:2}),body=payload({branch:'improve/p1',conclusion:'failure',id:900}),result=await handler.handle({event:'workflow_run',deliveryId:'repair-1',signature:sign('secret',body),rawBody:body});assert.equal(result.reason,'ci_repair_processed');assert.equal(result.attempt,1);assert.equal(args.runId,900);assert.equal(args.branch,'improve/p1')});
+test('CI auto-repair stops after its durable attempt budget',async()=>{const store=new MemoryStateStore();let calls=0;const ciRepair={repair:async()=>{calls++;return{status:'repair_published',changes:[]}}},handler=new GitHubWorkflowEventHandler({orchestrator:{resume:async()=>({})},stateStore:store,webhookSecret:'secret',ciRepair,improveRepositories:['owner/repo'],maxCiRepairAttempts:2});for(let i=1;i<=3;i++){const body=payload({branch:'improve/p2',conclusion:'failure',id:900+i}),result=await handler.handle({event:'workflow_run',deliveryId:`repair-${i+1}`,signature:sign('secret',body),rawBody:body});if(i<3)assert.equal(result.attempt,i);else assert.equal(result.reason,'ci_repair_budget_exhausted')}assert.equal(calls,2)});
+test('failed Improve workflow outside repository allowlist never invokes repair',async()=>{const store=new MemoryStateStore();let called=false;const ciRepair={repair:async()=>{called=true}},handler=new GitHubWorkflowEventHandler({orchestrator:{resume:async()=>({})},stateStore:store,webhookSecret:'secret',ciRepair,improveRepositories:['owner/allowed']}),body=payload({branch:'improve/p3',conclusion:'failure'}),result=await handler.handle({event:'workflow_run',deliveryId:'repair-x',signature:sign('secret',body),rawBody:body});assert.equal(called,false);assert.equal(result.reason,'no_matching_workflow')});
