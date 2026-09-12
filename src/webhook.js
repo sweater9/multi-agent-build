@@ -1,78 +1,9 @@
 import crypto from 'node:crypto';
-
-function safeHexEqual(a, b) {
-  const left = Buffer.from(String(a || ''), 'hex');
-  const right = Buffer.from(String(b || ''), 'hex');
-  if (left.length === 0 || left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
-}
-
-export function verifyGitHubSignature({ secret, rawBody, signature }) {
-  if (!secret) throw new Error('Webhook secret is required');
-  if (typeof rawBody !== 'string' && !Buffer.isBuffer(rawBody)) throw new Error('rawBody is required');
-  const supplied = String(signature || '').replace(/^sha256=/, '');
-  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  return safeHexEqual(expected, supplied);
-}
-
-export class GitHubWorkflowEventHandler {
-  constructor({ orchestrator, stateStore, webhookSecret } = {}) {
-    if (!orchestrator?.resume) throw new Error('orchestrator with resume() is required');
-    if (!stateStore?.findAwaitingByTarget || !stateStore?.claimEvent) {
-      throw new Error('stateStore must support target lookup and event claims');
-    }
-    if (!webhookSecret) throw new Error('webhookSecret is required');
-    this.orchestrator = orchestrator;
-    this.stateStore = stateStore;
-    this.webhookSecret = webhookSecret;
-  }
-
-  async handle({ event, deliveryId, signature, rawBody }) {
-    if (!verifyGitHubSignature({ secret: this.webhookSecret, rawBody, signature })) {
-      return { accepted: false, status: 401, reason: 'invalid_signature' };
-    }
-    if (!deliveryId) return { accepted: false, status: 400, reason: 'missing_delivery_id' };
-    if (!(await this.stateStore.claimEvent(deliveryId))) {
-      return { accepted: false, status: 202, reason: 'duplicate_delivery' };
-    }
-    if (event !== 'workflow_run') return { accepted: false, status: 202, reason: 'event_ignored' };
-
-    let payload;
-    try {
-      payload = JSON.parse(Buffer.isBuffer(rawBody) ? rawBody.toString('utf-8') : rawBody);
-    } catch {
-      return { accepted: false, status: 400, reason: 'invalid_json' };
-    }
-
-    const workflowRun = payload?.workflow_run;
-    if (!workflowRun || workflowRun.status !== 'completed') {
-      return { accepted: false, status: 202, reason: 'workflow_not_completed' };
-    }
-
-    const repository = payload?.repository?.full_name;
-    const branch = workflowRun.head_branch;
-    if (!repository || !branch) return { accepted: false, status: 400, reason: 'missing_repository_context' };
-
-    const matches = await this.stateStore.findAwaitingByTarget({ repository, branch });
-    if (matches.length === 0) {
-      return { accepted: false, status: 202, reason: 'no_matching_workflow', repository, branch };
-    }
-
-    const resumed = [];
-    for (const workflowRunId of matches) {
-      resumed.push(await this.orchestrator.resume(workflowRunId));
-    }
-
-    return {
-      accepted: true,
-      status: 202,
-      repository,
-      branch,
-      resumed_workflows: resumed.map((run) => ({
-        workflow_run_id: run.workflow_run_id,
-        workflow_status: run.workflow_status,
-        ready_for_merge: Boolean(run.final_synthesized_result?.ready_for_merge)
-      }))
-    };
-  }
+function safeHexEqual(a,b){const left=Buffer.from(String(a||''),'hex'),right=Buffer.from(String(b||''),'hex');if(left.length===0||left.length!==right.length)return false;return crypto.timingSafeEqual(left,right)}
+export function verifyGitHubSignature({secret,rawBody,signature}){if(!secret)throw new Error('Webhook secret is required');if(typeof rawBody!=='string'&&!Buffer.isBuffer(rawBody))throw new Error('rawBody is required');const supplied=String(signature||'').replace(/^sha256=/,''),expected=crypto.createHmac('sha256',secret).update(rawBody).digest('hex');return safeHexEqual(expected,supplied)}
+export class GitHubWorkflowEventHandler{
+ constructor({orchestrator,stateStore,webhookSecret,ciRepair=null,improveRepositories=[],maxCiRepairAttempts=2}={}){if(!orchestrator?.resume)throw new Error('orchestrator with resume() is required');if(!stateStore?.findAwaitingByTarget||!stateStore?.claimEvent)throw new Error('stateStore must support target lookup and event claims');if(ciRepair&&!stateStore?.claimCiRepairAttempt)throw new Error('stateStore must support CI repair attempt claims');if(!webhookSecret)throw new Error('webhookSecret is required');this.orchestrator=orchestrator;this.stateStore=stateStore;this.webhookSecret=webhookSecret;this.ciRepair=ciRepair;this.improveRepositories=new Set(improveRepositories);this.maxCiRepairAttempts=Math.min(Math.max(Number(maxCiRepairAttempts)||1,1),3)}
+ async handle({event,deliveryId,signature,rawBody}){if(!verifyGitHubSignature({secret:this.webhookSecret,rawBody,signature}))return{accepted:false,status:401,reason:'invalid_signature'};if(!deliveryId)return{accepted:false,status:400,reason:'missing_delivery_id'};if(!(await this.stateStore.claimEvent(deliveryId)))return{accepted:false,status:202,reason:'duplicate_delivery'};if(event!=='workflow_run')return{accepted:false,status:202,reason:'event_ignored'};let payload;try{payload=JSON.parse(Buffer.isBuffer(rawBody)?rawBody.toString('utf-8'):rawBody)}catch{return{accepted:false,status:400,reason:'invalid_json'}}const workflowRun=payload?.workflow_run;if(!workflowRun||workflowRun.status!=='completed')return{accepted:false,status:202,reason:'workflow_not_completed'};const repository=payload?.repository?.full_name,branch=workflowRun.head_branch;if(!repository||!branch)return{accepted:false,status:400,reason:'missing_repository_context'};
+  if(this.ciRepair&&workflowRun.conclusion==='failure'&&branch.startsWith('improve/')&&this.improveRepositories.has(repository)){const attempt=await this.stateStore.claimCiRepairAttempt({repository,branch,maxAttempts:this.maxCiRepairAttempts});if(!attempt)return{accepted:false,status:202,reason:'ci_repair_budget_exhausted',repository,branch};const repaired=await this.ciRepair.repair({repository,branch,runId:Number(workflowRun.id),request:`Repair failed CI workflow ${workflowRun.name||workflowRun.id}`,attempt});return{accepted:true,status:202,reason:'ci_repair_processed',repository,branch,attempt,repair_status:repaired.status,changes:repaired.changes||[]}}
+  const matches=await this.stateStore.findAwaitingByTarget({repository,branch});if(matches.length===0)return{accepted:false,status:202,reason:'no_matching_workflow',repository,branch};const resumed=[];for(const workflowRunId of matches)resumed.push(await this.orchestrator.resume(workflowRunId));return{accepted:true,status:202,repository,branch,resumed_workflows:resumed.map(run=>({workflow_run_id:run.workflow_run_id,workflow_status:run.workflow_status,ready_for_merge:Boolean(run.final_synthesized_result?.ready_for_merge)}))}
 }
